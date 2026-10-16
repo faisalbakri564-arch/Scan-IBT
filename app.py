@@ -1,15 +1,17 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
+import re
 import io
 import os
+import streamlit.components.v1 as components
 
 # Mengatur tampilan halaman web
 st.set_page_config(page_title="Receiving IBT System", layout="wide", page_icon="📦")
 
 DB_FILE = "database_lokal.json"
 
-# --- DATABASE LOKAL (Tanpa Google Sheets & Tanpa Secrets) ---
+# --- FUNGSI DATABASE LOKAL & HAPUS DATA ---
 def load_data():
     if os.path.exists(DB_FILE):
         try:
@@ -21,8 +23,23 @@ def load_data():
 def save_data(df):
     df.to_json(DB_FILE, orient="records", indent=4)
 
+def hapus_semua_data():
+    if os.path.exists(DB_FILE):
+        os.remove(DB_FILE)
+
+# --- MENU SAMPING (SIDEBAR) UNTUK HAPUS DATA ---
+with st.sidebar:
+    st.header("⚙️ Pengaturan Sistem")
+    st.write("Gunakan tombol ini untuk mereset aplikasi dan menghapus data yang tersimpan agar tidak ada jejak.")
+    if st.button("🗑️ Hapus Seluruh Data Sistem", type="primary", use_container_width=True):
+        hapus_semua_data()
+        st.session_state['role'] = None
+        st.success("✅ Seluruh data berhasil dihapus dari sistem!")
+        import time
+        time.sleep(1)
+        st.rerun()
+
 # --- FUNGSI BACA PDF ---
-import re
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
     metadata = {"IBT No": "-", "ERP No": "-"}
@@ -56,8 +73,8 @@ if 'role' not in st.session_state:
     st.session_state['role'] = None
 
 if st.session_state['role'] is None:
-    st.title("📦 Sistem Receiving IBT Guardian (Lokal Mode)")
-    st.write("Silakan pilih peran Anda untuk masuk ke sistem:")
+    st.title("📦 Sistem Receiving IBT Guardian")
+    st.write("Silakan pilih peran Anda:")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("💻 Masuk sebagai Admin (PC)", use_container_width=True):
@@ -91,14 +108,13 @@ elif st.session_state['role'] == "Admin":
                 if semua_df:
                     df_gabung = pd.concat(semua_df, ignore_index=True)
                     save_data(df_gabung)
-                    st.success("✅ Data berhasil disimpan di server lokal!")
+                    st.success("✅ Data berhasil disimpan di server lokal! Staf HP sudah bisa mengecek.")
             else:
                 st.warning("Pilih file PDF dulu!")
                 
         st.markdown("---")
         st.write("Data Saat Ini di Database:")
-        df_curr = load_data()
-        st.dataframe(df_curr, use_container_width=True)
+        st.dataframe(load_data(), use_container_width=True)
 
     with tab3:
         st.header("Koreksi & Download Laporan Akhir")
@@ -135,15 +151,63 @@ elif st.session_state['role'] == "Staff":
         pilih_ibt = st.selectbox("📌 Pilih dokumen IBT yang kamu bongkar:", daftar_ibt)
         st.markdown("---")
         
-        st.write("📷 **Foto Barcode Kardus (Opsional)**")
-        foto = st.camera_input("Jepret Kamera")
-        if foto:
-            st.success("Foto berhasil diambil!")
+        st.write("📷 **Live Barcode Scanner**")
+        
+        # Tombol untuk memunculkan Scanner agar perizinan kamera tidak otomatis diminta
+        if "tampilkan_scanner" not in st.session_state:
+            st.session_state["tampilkan_scanner"] = False
             
+        if st.button("🔴 Buka Layar Scanner"):
+            st.session_state["tampilkan_scanner"] = True
+            
+        if st.session_state["tampilkan_scanner"]:
+            # HTML5 Live Scanner Injection
+            components.html(
+                """
+                <div id="qr-reader" style="width:100%; max-width:500px; margin:auto;"></div>
+                <script src="https://unpkg.com/html5-qrcode"></script>
+                <script>
+                    function docReady(fn) {
+                        if (document.readyState === "complete" || document.readyState === "interactive") { setTimeout(fn, 1); } 
+                        else { document.addEventListener("DOMContentLoaded", fn); }
+                    }
+                    docReady(function () {
+                        function onScanSuccess(decodedText, decodedResult) {
+                            // Mainkan suara beep
+                            var audio = new Audio('https://www.soundjay.com/buttons/sounds/button-09.mp3');
+                            audio.play();
+                            
+                            // Hentikan scanner setelah berhasil
+                            html5QrcodeScanner.clear();
+                            document.getElementById('qr-reader').innerHTML = `<h3 style="color:green; text-align:center;">✅ Terscan: ${decodedText}</h3><p style="text-align:center;">Data sudah masuk ke kolom di bawah. Silakan klik tombol <b>Simpan Data</b>.</p>`;
+                            
+                            // Auto-fill ke kolom Streamlit
+                            const parentDoc = window.parent.document;
+                            const inputs = parentDoc.querySelectorAll('input');
+                            inputs.forEach(input => {
+                                if (input.getAttribute('aria-label') === 'Ketik 13 Digit Barcode:') {
+                                    let nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                                    nativeSetter.call(input, decodedText);
+                                    let ev = new Event('input', { bubbles: true});
+                                    input.dispatchEvent(ev);
+                                }
+                            });
+                        }
+                        var html5QrcodeScanner = new Html5QrcodeScanner("qr-reader", { fps: 10, qrbox: 250 });
+                        html5QrcodeScanner.render(onScanSuccess);
+                    });
+                </script>
+                """,
+                height=450,
+            )
+            if st.button("Tutup Scanner"):
+                st.session_state["tampilkan_scanner"] = False
+                st.rerun()
+
         st.markdown("---")
         st.write("📦 **Input Barang ke Database**")
         with st.form(key='form_scan', clear_on_submit=True):
-            barcode_manual = st.text_input("Ketik 13 Digit Barcode:", placeholder="Misal: 9555237206059")
+            barcode_manual = st.text_input("Ketik 13 Digit Barcode:", placeholder="Akan terisi otomatis jika pakai scanner...")
             qty_input = st.number_input("Jumlah (Qty):", min_value=1, value=1, step=1)
             submit_scan = st.form_submit_button("➕ Simpan Data", use_container_width=True)
 
@@ -161,7 +225,6 @@ elif st.session_state['role'] == "Staff":
                 hasil_lama = int(df_live.at[idx, 'Hasil Cek Store'])
                 hasil_baru = hasil_lama + qty_input
                 
-                # SUDAH DIPERBAIKI (Tidak ada typo lagi)
                 status_baru = "✅ Sesuai" if hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
                 
                 df_live.at[idx, 'Hasil Cek Store'] = hasil_baru
