@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
-import re
 import io
 import os
 
@@ -10,7 +9,7 @@ st.set_page_config(page_title="Receiving IBT System", layout="wide", page_icon="
 
 DB_FILE = "database_lokal.json"
 
-# --- DATABASE LOKAL (Tanpa Google Sheets) ---
+# --- DATABASE LOKAL (Tanpa Google Sheets & Tanpa Secrets) ---
 def load_data():
     if os.path.exists(DB_FILE):
         try:
@@ -23,6 +22,7 @@ def save_data(df):
     df.to_json(DB_FILE, orient="records", indent=4)
 
 # --- FUNGSI BACA PDF ---
+import re
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
     metadata = {"IBT No": "-", "ERP No": "-"}
@@ -160,7 +160,9 @@ elif st.session_state['role'] == "Staff":
                 target = int(df_live.at[idx, 'Target IBT'])
                 hasil_lama = int(df_live.at[idx, 'Hasil Cek Store'])
                 hasil_baru = hasil_lama + qty_input
-                status_baru = "✅ Sesuai" iju hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
+                
+                # SUDAH DIPERBAIKI (Tidak ada typo lagi)
+                status_baru = "✅ Sesuai" if hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
                 
                 df_live.at[idx, 'Hasil Cek Store'] = hasil_baru
                 df_live.at[idx, 'Status'] = status_baru
