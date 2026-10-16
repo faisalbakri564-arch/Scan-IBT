@@ -15,17 +15,17 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1oECCwC3p9544FaPefpscA
 
 @st.cache_resource
 def setup_gsheets():
-    try:
-        credentials_dict = json.loads(st.secrets["gcp_service_account"]["json_key"])
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
-        client = gspread.authorize(creds)
-        sheet = client.open_by_url(SPREADSHEET_URL).sheet1
-        return sheet
-    except Exception as e:
-        return None
+    credentials_dict = json.loads(st.secrets["gcp_service_account"]["json_key"])
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
+    client = gspread.authorize(creds)
+    return client.open_by_url(SPREADSHEET_URL).sheet1
 
-sheet = setup_gsheets()
+try:
+    sheet = setup_gsheets()
+except Exception as e:
+    st.error(f"Koneksi Gagal! Ini pesan asli dari sistem: {e}")
+    st.stop()
 
 # --- FUNGSI BACA DATA ---
 def get_data_from_sheets():
