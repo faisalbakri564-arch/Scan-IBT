@@ -3,47 +3,26 @@ import pandas as pd
 import pdfplumber
 import re
 import io
-import json
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import os
 
 # Mengatur tampilan halaman web
 st.set_page_config(page_title="Receiving IBT System", layout="wide", page_icon="📦")
 
-# --- KONEKSI KE GOOGLE SHEETS (Mendukung Semua Format Secrets) ---
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1oECCwC3p9544FaPefpscAAs5hsVxqN8wcxhlt54hpkA/edit"
+DB_FILE = "database_lokal.json"
 
-@st.cache_resource
-def setup_gsheets():
-    try:
-        # Kode ini otomatis mendeteksi format apa pun yang ada di Secrets kamu
-        sec = st.secrets["gcp_service_account"]
-        if "json_key" in sec:
-            raw_val = sec["json_key"]
-            credentials_dict = raw_val if isinstance(raw_val, dict) else json.loads(raw_val)
-        else:
-            credentials_dict = dict(sec)
-            
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
-        client = gspread.authorize(creds)
-        sheet = client.open_by_url(SPREADSHEET_URL).sheet1
-        return sheet
-    except Exception as e:
-        st.error(f"⚠️ Detail Error Koneksi Google Sheets: {e}")
-        return None
+# --- DATABASE LOKAL (Tanpa Google Sheets) ---
+def load_data():
+    if os.path.exists(DB_FILE):
+        try:
+            return pd.read_json(DB_FILE)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
 
-sheet = setup_gsheets()
+def save_data(df):
+    df.to_json(DB_FILE, orient="records", indent=4)
 
-# --- FUNGSI BACA DATA ---
-def get_data_from_sheets():
-    if sheet is None: return pd.DataFrame()
-    try:
-        data = sheet.get_all_records()
-        return pd.DataFrame(data)
-    except Exception:
-        return pd.DataFrame()
-
+# --- FUNGSI BACA PDF ---
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
     metadata = {"IBT No": "-", "ERP No": "-"}
@@ -59,16 +38,16 @@ def baca_pdf_ibt_multi(file_pdf):
             for baris in baris_teks:
                 cocok = re.search(r'(\d{13})\s+(.*?)\s+EA\s+(\d+)\s+(\d+)', baris)
                 if cocok:
-                    data_barang.append([
-                        metadata["IBT No"],
-                        metadata["ERP No"],
-                        cocok.group(1),
-                        cocok.group(2).strip(),
-                        int(cocok.group(4)),
-                        0,
-                        "Belum Dicek"
-                    ])
-    return data_barang
+                    data_barang.append({
+                        "IBT No": metadata["IBT No"],
+                        "ERP No": metadata["ERP No"],
+                        "Barcode": cocok.group(1),
+                        "Nama Barang": cocok.group(2).strip(),
+                        "Target IBT": int(cocok.group(4)),
+                        "Hasil Cek Store": 0,
+                        "Status": "Belum Dicek"
+                    })
+    return pd.DataFrame(data_barang)
 
 # ==========================================
 # PEMISAHAN HALAMAN ADMIN vs STAFF
@@ -76,12 +55,8 @@ def baca_pdf_ibt_multi(file_pdf):
 if 'role' not in st.session_state:
     st.session_state['role'] = None
 
-if sheet is None:
-    st.error("Gagal terhubung ke Google Sheets. Periksa kembali konfigurasi Secrets Anda.")
-    st.stop()
-
 if st.session_state['role'] is None:
-    st.title("📦 Sistem Receiving IBT Guardian")
+    st.title("📦 Sistem Receiving IBT Guardian (Lokal Mode)")
     st.write("Silakan pilih peran Anda untuk masuk ke sistem:")
     col1, col2 = st.columns(2)
     with col1:
@@ -94,7 +69,7 @@ if st.session_state['role'] is None:
             st.rerun()
 
 # ==========================================
-# HALAMAN ADMIN (Hanya Tampil di PC)
+# HALAMAN ADMIN (PC)
 # ==========================================
 elif st.session_state['role'] == "Admin":
     st.title("💻 Dashboard Admin IBT")
@@ -110,27 +85,28 @@ elif st.session_state['role'] == "Admin":
 
         if st.button("Proses Upload ke Database"):
             if file_uploads:
-                with st.spinner("Mengunggah data ke Google Sheets..."):
-                    semua_data = []
-                    for file in file_uploads:
-                        semua_data.extend(baca_pdf_ibt_multi(file))
-                    if semua_data:
-                        sheet.clear()
-                        sheet.append_row(["IBT No", "ERP No", "Barcode", "Nama Barang", "Target IBT", "Hasil Cek Store", "Status"])
-                        sheet.append_rows(semua_data)
-                        st.success("✅ Data berhasil diunggah dan disinkronkan ke Cloud!")
+                semua_df = []
+                for file in file_uploads:
+                    semua_df.append(baca_pdf_ibt_multi(file))
+                if semua_df:
+                    df_gabung = pd.concat(semua_df, ignore_index=True)
+                    save_data(df_gabung)
+                    st.success("✅ Data berhasil disimpan di server lokal!")
             else:
                 st.warning("Pilih file PDF dulu!")
                 
         st.markdown("---")
-        st.write("Data Saat Ini di Database Google Sheets:")
-        st.dataframe(get_data_from_sheets(), use_container_width=True)
+        st.write("Data Saat Ini di Database:")
+        df_curr = load_data()
+        st.dataframe(df_curr, use_container_width=True)
 
     with tab3:
         st.header("Koreksi & Download Laporan Akhir")
-        df_akhir = get_data_from_sheets()
-        if not df_akhir.empty:
-            df_edit = st.data_editor(df_akhir, num_rows="dynamic", use_container_width=True)
+        df_curr = load_data()
+        if not df_curr.empty:
+            df_edit = st.data_editor(df_curr, num_rows="dynamic", use_container_width=True)
+            save_data(df_edit)
+            
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_edit.to_excel(writer, index=False, sheet_name='Laporan_Receiving')
@@ -141,10 +117,10 @@ elif st.session_state['role'] == "Admin":
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             )
         else:
-            st.info("Belum ada data di database.")
+            st.info("Belum ada data.")
 
 # ==========================================
-# HALAMAN STAFF (Hanya Tampil di HP)
+# HALAMAN STAFF (HP)
 # ==========================================
 elif st.session_state['role'] == "Staff":
     st.title("📱 Pengecekan Barang")
@@ -152,10 +128,10 @@ elif st.session_state['role'] == "Staff":
         st.session_state['role'] = None
         st.rerun()
         
-    df_sementara = get_data_from_sheets()
+    df_data = load_data()
     
-    if not df_sementara.empty and 'IBT No' in df_sementara.columns:
-        daftar_ibt = df_sementara['IBT No'].unique()
+    if not df_data.empty and 'IBT No' in df_data.columns:
+        daftar_ibt = df_data['IBT No'].unique()
         pilih_ibt = st.selectbox("📌 Pilih dokumen IBT yang kamu bongkar:", daftar_ibt)
         st.markdown("---")
         
@@ -173,24 +149,24 @@ elif st.session_state['role'] == "Staff":
 
         if submit_scan and barcode_manual:
             barcode_manual = barcode_manual.strip()
-            df_terbaru = get_data_from_sheets()
+            df_live = load_data()
             
-            kondisi_ibt = df_terbaru['IBT No'] == pilih_ibt
-            kondisi_barcode = df_terbaru['Barcode'].astype(str) == barcode_manual
-            pencarian = df_terbaru[kondisi_ibt & kondisi_barcode]
+            kondisi_ibt = df_live['IBT No'] == pilih_ibt
+            kondisi_barcode = df_live['Barcode'].astype(str) == barcode_manual
+            pencarian = df_live[kondisi_ibt & kondisi_barcode]
             
             if not pencarian.empty:
                 idx = pencarian.index[0]
-                target = int(df_terbaru.at[idx, 'Target IBT'])
-                hasil_lama = int(df_terbaru.at[idx, 'Hasil Cek Store'])
+                target = int(df_live.at[idx, 'Target IBT'])
+                hasil_lama = int(df_live.at[idx, 'Hasil Cek Store'])
                 hasil_baru = hasil_lama + qty_input
-                status_baru = "✅ Sesuai" if hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
+                status_baru = "✅ Sesuai" iju hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
                 
-                row_in_sheet = int(idx) + 2 
-                sheet.update_cell(row_in_sheet, 6, hasil_baru)
-                sheet.update_cell(row_in_sheet, 7, status_baru)
+                df_live.at[idx, 'Hasil Cek Store'] = hasil_baru
+                df_live.at[idx, 'Status'] = status_baru
+                save_data(df_live)
                 
-                st.success(f"Berhasil! {qty_input} pcs {df_terbaru.at[idx, 'Nama Barang']} ditambahkan.")
+                st.success(f"Berhasil! {qty_input} pcs {df_live.at[idx, 'Nama Barang']} ditambahkan.")
             else:
                 st.error(f"❌ Barcode {barcode_manual} TIDAK ADA dalam IBT {pilih_ibt}!")
     else:
