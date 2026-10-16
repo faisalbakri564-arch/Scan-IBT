@@ -15,7 +15,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-st.title("📦 Dashboard Receiving IBT (Kamera HP)")
+st.title("📦 Dashboard Receiving IBT")
 
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
