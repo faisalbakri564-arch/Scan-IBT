@@ -153,7 +153,7 @@ elif st.session_state['role'] == "Staff":
         
         st.write("📷 **Live Barcode Scanner**")
         
-        # Tombol untuk memunculkan Scanner agar perizinan kamera tidak otomatis diminta
+        # Tombol untuk memunculkan Scanner agar perizinan tidak otomatis
         if "tampilkan_scanner" not in st.session_state:
             st.session_state["tampilkan_scanner"] = False
             
@@ -161,10 +161,15 @@ elif st.session_state['role'] == "Staff":
             st.session_state["tampilkan_scanner"] = True
             
         if st.session_state["tampilkan_scanner"]:
-            # HTML5 Live Scanner Injection
+            # HTML5 Live Scanner Injection dengan Tombol Flip Kamera
             components.html(
                 """
-                <div id="qr-reader" style="width:100%; max-width:500px; margin:auto;"></div>
+                <div id="qr-reader" style="width:100%; max-width:500px; margin:auto; border-radius:10px; border:2px solid #ddd; overflow:hidden;"></div>
+                <div style="text-align: center; margin-top: 15px;">
+                    <button id="btn-switch" style="padding: 10px 20px; font-size: 14px; background-color: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                        🔄 Ganti Kamera Depan/Belakang
+                    </button>
+                </div>
                 <script src="https://unpkg.com/html5-qrcode"></script>
                 <script>
                     function docReady(fn) {
@@ -172,16 +177,22 @@ elif st.session_state['role'] == "Staff":
                         else { document.addEventListener("DOMContentLoaded", fn); }
                     }
                     docReady(function () {
+                        let currentFacingMode = "environment"; // Otomatis tembak kamera belakang
+                        let isScanning = false;
+                        const html5QrCode = new Html5Qrcode("qr-reader");
+
                         function onScanSuccess(decodedText, decodedResult) {
-                            // Mainkan suara beep
                             var audio = new Audio('https://www.soundjay.com/buttons/sounds/button-09.mp3');
                             audio.play();
                             
-                            // Hentikan scanner setelah berhasil
-                            html5QrcodeScanner.clear();
-                            document.getElementById('qr-reader').innerHTML = `<h3 style="color:green; text-align:center;">✅ Terscan: ${decodedText}</h3><p style="text-align:center;">Data sudah masuk ke kolom di bawah. Silakan klik tombol <b>Simpan Data</b>.</p>`;
+                            if (isScanning) {
+                                html5QrCode.stop().then(() => {
+                                    isScanning = false;
+                                    document.getElementById('qr-reader').innerHTML = `<h3 style="color:green; text-align:center; padding:20px;">✅ Terscan: ${decodedText}</h3><p style="text-align:center;">Data masuk ke kolom di bawah. Silakan klik tombol <b>Simpan Data</b>.</p>`;
+                                    document.getElementById('btn-switch').style.display = 'none';
+                                });
+                            }
                             
-                            // Auto-fill ke kolom Streamlit
                             const parentDoc = window.parent.document;
                             const inputs = parentDoc.querySelectorAll('input');
                             inputs.forEach(input => {
@@ -193,12 +204,40 @@ elif st.session_state['role'] == "Staff":
                                 }
                             });
                         }
-                        var html5QrcodeScanner = new Html5QrcodeScanner("qr-reader", { fps: 10, qrbox: 250 });
-                        html5QrcodeScanner.render(onScanSuccess);
+
+                        function startCamera() {
+                            html5QrCode.start(
+                                { facingMode: currentFacingMode },
+                                { fps: 10, qrbox: { width: 250, height: 250 } },
+                                onScanSuccess,
+                                (errorMessage) => { /* abaikan frame kosong */ }
+                            ).then(() => {
+                                isScanning = true;
+                            }).catch((err) => {
+                                console.log(err);
+                                document.getElementById('qr-reader').innerHTML = `<p style="color:red; text-align:center;">Gagal mengakses kamera. Pastikan izin kamera sudah diberikan di browser.</p>`;
+                            });
+                        }
+
+                        // Logika Tombol Ganti Kamera
+                        document.getElementById('btn-switch').addEventListener('click', () => {
+                            if (isScanning) {
+                                html5QrCode.stop().then(() => {
+                                    isScanning = false;
+                                    currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
+                                    startCamera();
+                                });
+                            } else {
+                                currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
+                                startCamera();
+                            }
+                        });
+
+                        startCamera();
                     });
                 </script>
                 """,
-                height=450,
+                height=550,
             )
             if st.button("Tutup Scanner"):
                 st.session_state["tampilkan_scanner"] = False
