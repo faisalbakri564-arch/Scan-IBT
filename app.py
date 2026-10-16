@@ -10,13 +10,20 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Mengatur tampilan halaman web
 st.set_page_config(page_title="Receiving IBT System", layout="wide", page_icon="📦")
 
-# --- KONEKSI KE GOOGLE SHEETS ---
+# --- KONEKSI KE GOOGLE SHEETS (Mendukung Semua Format Secrets) ---
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1oECCwC3p9544FaPefpscAAs5hsVxqN8wcxhlt54hpkA/edit"
 
 @st.cache_resource
 def setup_gsheets():
     try:
-        credentials_dict = json.loads(st.secrets["gcp_service_account"]["json_key"])
+        # Kode ini otomatis mendeteksi format apa pun yang ada di Secrets kamu
+        sec = st.secrets["gcp_service_account"]
+        if "json_key" in sec:
+            raw_val = sec["json_key"]
+            credentials_dict = raw_val if isinstance(raw_val, dict) else json.loads(raw_val)
+        else:
+            credentials_dict = dict(sec)
+            
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
         client = gspread.authorize(creds)
@@ -70,7 +77,7 @@ if 'role' not in st.session_state:
     st.session_state['role'] = None
 
 if sheet is None:
-    st.error("Gagal terhubung ke Google Sheets. Periksa kembali struktur 'Secrets' di pengaturan Streamlit Anda.")
+    st.error("Gagal terhubung ke Google Sheets. Periksa kembali konfigurasi Secrets Anda.")
     st.stop()
 
 if st.session_state['role'] is None:
@@ -108,7 +115,6 @@ elif st.session_state['role'] == "Admin":
                     for file in file_uploads:
                         semua_data.extend(baca_pdf_ibt_multi(file))
                     if semua_data:
-                        # Membersihkan baris lama di sheets lalu isi dengan yang baru
                         sheet.clear()
                         sheet.append_row(["IBT No", "ERP No", "Barcode", "Nama Barang", "Target IBT", "Hasil Cek Store", "Status"])
                         sheet.append_rows(semua_data)
@@ -153,7 +159,6 @@ elif st.session_state['role'] == "Staff":
         pilih_ibt = st.selectbox("📌 Pilih dokumen IBT yang kamu bongkar:", daftar_ibt)
         st.markdown("---")
         
-        # Fitur Kamera Sederhana (Pasti Muncul)
         st.write("📷 **Foto Barcode Kardus (Opsional)**")
         foto = st.camera_input("Jepret Kamera")
         if foto:
@@ -168,7 +173,7 @@ elif st.session_state['role'] == "Staff":
 
         if submit_scan and barcode_manual:
             barcode_manual = barcode_manual.strip()
-            df_terbaru = get_data_from_sheets() # Ambil data paling fresh
+            df_terbaru = get_data_from_sheets()
             
             kondisi_ibt = df_terbaru['IBT No'] == pilih_ibt
             kondisi_barcode = df_terbaru['Barcode'].astype(str) == barcode_manual
@@ -181,7 +186,6 @@ elif st.session_state['role'] == "Staff":
                 hasil_baru = hasil_lama + qty_input
                 status_baru = "✅ Sesuai" if hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
                 
-                # UPDATE GOOGLE SHEETS SECARA REAL-TIME
                 row_in_sheet = int(idx) + 2 
                 sheet.update_cell(row_in_sheet, 6, hasil_baru)
                 sheet.update_cell(row_in_sheet, 7, status_baru)
