@@ -151,7 +151,7 @@ elif st.session_state['role'] == "Staff":
         pilih_ibt = st.selectbox("📌 Pilih dokumen IBT yang kamu bongkar:", daftar_ibt)
         st.markdown("---")
         
-        st.write("📷 **Live Barcode Scanner**")
+        st.write("📷 **Live Barcode Scanner (Non-Stop)**")
         
         if "tampilkan_scanner" not in st.session_state:
             st.session_state["tampilkan_scanner"] = False
@@ -160,10 +160,12 @@ elif st.session_state['role'] == "Staff":
             st.session_state["tampilkan_scanner"] = True
             
         if st.session_state["tampilkan_scanner"]:
+            # HTML5 Live Scanner Injection
             components.html(
                 """
                 <div id="qr-reader" style="width:100%; max-width:500px; margin:auto; border-radius:10px; border:2px solid #ddd; overflow:hidden;"></div>
-                <div style="text-align: center; margin-top: 15px;">
+                <div id="scan-result" style="text-align:center; height:30px; margin-top:10px; font-weight:bold; font-size:16px;">Mencari barcode...</div>
+                <div style="text-align: center; margin-top: 5px;">
                     <button id="btn-switch" style="padding: 10px 20px; font-size: 14px; background-color: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                         🔄 Ganti Kamera
                     </button>
@@ -175,28 +177,22 @@ elif st.session_state['role'] == "Staff":
                         else { document.addEventListener("DOMContentLoaded", fn); }
                     }
                     
-                    // FUNGSI SUARA & GETAR LANGSUNG DARI HARDWARE HP
                     function playBeep() {
                         try {
                             const AudioContext = window.AudioContext || window.webkitAudioContext;
                             const audioCtx = new AudioContext();
                             const oscillator = audioCtx.createOscillator();
                             const gainNode = audioCtx.createGain();
-                            
                             oscillator.type = 'sine';
-                            oscillator.frequency.setValueAtTime(1000, audioCtx.currentTime); // Frekuensi BEEP
-                            
+                            oscillator.frequency.setValueAtTime(1000, audioCtx.currentTime); 
                             gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
-                            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15); // Bunyi sangat cepat
-                            
+                            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15); 
                             oscillator.connect(gainNode);
                             gainNode.connect(audioCtx.destination);
-                            
                             oscillator.start();
                             oscillator.stop(audioCtx.currentTime + 0.15);
                         } catch(e) { console.log("Audio API not supported"); }
                         
-                        // Efek Getar HP 200ms
                         if (navigator.vibrate) {
                             navigator.vibrate(200);
                         }
@@ -205,27 +201,34 @@ elif st.session_state['role'] == "Staff":
                     docReady(function () {
                         let currentFacingMode = "environment";
                         let isScanning = false;
+                        let lastScanTime = 0;
+                        let lastScannedText = "";
                         
-                        // HANYA MENCARI BARCODE BARANG/KARDUS (Bikin scan jauh lebih responsif)
                         const formatsToSupport = [
                             Html5QrcodeSupportedFormats.EAN_13,
-                            Html5QrcodeSupportedFormats.EAN_8,
                             Html5QrcodeSupportedFormats.CODE_128,
                             Html5QrcodeSupportedFormats.UPC_A
                         ];
 
-                        const html5QrCode = new Html5Qrcode("qr-reader", { formatsToSupport: formatsToSupport });
+                        // MENGAKTIFKAN HARDWARE DETECTOR (Sangat Akurat)
+                        const html5QrCode = new Html5Qrcode("qr-reader", { 
+                            formatsToSupport: formatsToSupport,
+                            experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+                        });
 
                         function onScanSuccess(decodedText, decodedResult) {
-                            playBeep(); // Panggil fungsi suara & getar
+                            let currentTime = new Date().getTime();
                             
-                            if (isScanning) {
-                                html5QrCode.stop().then(() => {
-                                    isScanning = false;
-                                    document.getElementById('qr-reader').innerHTML = `<h3 style="color:green; text-align:center; padding:20px;">✅ ${decodedText}</h3>`;
-                                    document.getElementById('btn-switch').style.display = 'none';
-                                });
+                            // Jeda memori 2 detik supaya tidak spam beep pada barang yang sama
+                            if (decodedText === lastScannedText && (currentTime - lastScanTime) < 2000) {
+                                return;
                             }
+                            
+                            lastScanTime = currentTime;
+                            lastScannedText = decodedText;
+                            playBeep(); 
+                            
+                            document.getElementById('scan-result').innerHTML = `<span style="color:green;">✅ Berhasil: ${decodedText}</span>`;
                             
                             const parentDoc = window.parent.document;
                             const inputs = parentDoc.querySelectorAll('input');
@@ -237,22 +240,24 @@ elif st.session_state['role'] == "Staff":
                                     input.dispatchEvent(ev);
                                 }
                             });
+                            
+                            // KAMERA TIDAK LAGI DIMATIKAN DISINI (Continuous mode aktif)
                         }
 
                         function startCamera() {
                             html5QrCode.start(
                                 { facingMode: currentFacingMode },
                                 { 
-                                    fps: 15, // Optimal untuk browser HP (tidak memberatkan CPU)
-                                    qrbox: { width: 250, height: 100 }, // Kotak tipis memaksa fokus pas di garis barcode
-                                    disableFlip: true // MATIKAN MIRRORING agar HP tidak nge-lag
+                                    fps: 15, 
+                                    qrbox: { width: 280, height: 120 }, 
+                                    disableFlip: true 
                                 },
                                 onScanSuccess,
                                 (errorMessage) => { }
                             ).then(() => {
                                 isScanning = true;
                             }).catch((err) => {
-                                document.getElementById('qr-reader').innerHTML = `<p style="color:red; text-align:center;">Gagal mengakses kamera.</p>`;
+                                document.getElementById('scan-result').innerHTML = `<span style="color:red;">Kamera terblokir/gagal.</span>`;
                             });
                         }
 
@@ -273,7 +278,7 @@ elif st.session_state['role'] == "Staff":
                     });
                 </script>
                 """,
-                height=500,
+                height=530,
             )
             if st.button("Tutup Scanner"):
                 st.session_state["tampilkan_scanner"] = False
