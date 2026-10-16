@@ -15,23 +15,27 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1oECCwC3p9544FaPefpscA
 
 @st.cache_resource
 def setup_gsheets():
-    credentials_dict = json.loads(st.secrets["gcp_service_account"]["json_key"])
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
-    client = gspread.authorize(creds)
-    return client.open_by_url(SPREADSHEET_URL).sheet1
+    try:
+        credentials_dict = json.loads(st.secrets["gcp_service_account"]["json_key"])
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_url(SPREADSHEET_URL).sheet1
+        return sheet
+    except Exception as e:
+        st.error(f"⚠️ Detail Error Koneksi Google Sheets: {e}")
+        return None
 
-try:
-    sheet = setup_gsheets()
-except Exception as e:
-    st.error(f"Koneksi Gagal! Ini pesan asli dari sistem: {e}")
-    st.stop()
+sheet = setup_gsheets()
 
 # --- FUNGSI BACA DATA ---
 def get_data_from_sheets():
     if sheet is None: return pd.DataFrame()
-    data = sheet.get_all_records()
-    return pd.DataFrame(data)
+    try:
+        data = sheet.get_all_records()
+        return pd.DataFrame(data)
+    except Exception:
+        return pd.DataFrame()
 
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
@@ -65,6 +69,10 @@ def baca_pdf_ibt_multi(file_pdf):
 if 'role' not in st.session_state:
     st.session_state['role'] = None
 
+if sheet is None:
+    st.error("Gagal terhubung ke Google Sheets. Periksa kembali struktur 'Secrets' di pengaturan Streamlit Anda.")
+    st.stop()
+
 if st.session_state['role'] is None:
     st.title("📦 Sistem Receiving IBT Guardian")
     st.write("Silakan pilih peran Anda untuk masuk ke sistem:")
@@ -86,10 +94,6 @@ elif st.session_state['role'] == "Admin":
     if st.button("⬅️ Kembali ke Menu Awal"):
         st.session_state['role'] = None
         st.rerun()
-    
-    if sheet is None:
-        st.error("Gagal terhubung ke Google Sheets. Cek kunci rahasia JSON di Settings Streamlit!")
-        st.stop()
         
     tab1, tab3 = st.tabs(["📥 1. Upload Data PDF", "📝 2. Laporan & Edit Excel"])
     
@@ -99,13 +103,16 @@ elif st.session_state['role'] == "Admin":
 
         if st.button("Proses Upload ke Database"):
             if file_uploads:
-                with st.spinner("Mengunggah data..."):
+                with st.spinner("Mengunggah data ke Google Sheets..."):
                     semua_data = []
                     for file in file_uploads:
                         semua_data.extend(baca_pdf_ibt_multi(file))
                     if semua_data:
+                        # Membersihkan baris lama di sheets lalu isi dengan yang baru
+                        sheet.clear()
+                        sheet.append_row(["IBT No", "ERP No", "Barcode", "Nama Barang", "Target IBT", "Hasil Cek Store", "Status"])
                         sheet.append_rows(semua_data)
-                        st.success("✅ Data berhasil diunggah! Staf toko sudah bisa mulai mengecek.")
+                        st.success("✅ Data berhasil diunggah dan disinkronkan ke Cloud!")
             else:
                 st.warning("Pilih file PDF dulu!")
                 
@@ -127,6 +134,8 @@ elif st.session_state['role'] == "Admin":
                 file_name='Hasil_Receiving_Akhir.xlsx',
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             )
+        else:
+            st.info("Belum ada data di database.")
 
 # ==========================================
 # HALAMAN STAFF (Hanya Tampil di HP)
@@ -139,16 +148,14 @@ elif st.session_state['role'] == "Staff":
         
     df_sementara = get_data_from_sheets()
     
-    if not df_sementara.empty:
+    if not df_sementara.empty and 'IBT No' in df_sementara.columns:
         daftar_ibt = df_sementara['IBT No'].unique()
         pilih_ibt = st.selectbox("📌 Pilih dokumen IBT yang kamu bongkar:", daftar_ibt)
         st.markdown("---")
         
         # Fitur Kamera Sederhana (Pasti Muncul)
         st.write("📷 **Foto Barcode Kardus (Opsional)**")
-        st.write("Jika butuh bukti, ambil foto kardus/barcode di sini:")
         foto = st.camera_input("Jepret Kamera")
-        
         if foto:
             st.success("Foto berhasil diambil!")
             
@@ -161,24 +168,26 @@ elif st.session_state['role'] == "Staff":
 
         if submit_scan and barcode_manual:
             barcode_manual = barcode_manual.strip()
-            kondisi_ibt = df_sementara['IBT No'] == pilih_ibt
-            kondisi_barcode = df_sementara['Barcode'].astype(str) == barcode_manual
-            pencarian = df_sementara[kondisi_ibt & kondisi_barcode]
+            df_terbaru = get_data_from_sheets() # Ambil data paling fresh
+            
+            kondisi_ibt = df_terbaru['IBT No'] == pilih_ibt
+            kondisi_barcode = df_terbaru['Barcode'].astype(str) == barcode_manual
+            pencarian = df_terbaru[kondisi_ibt & kondisi_barcode]
             
             if not pencarian.empty:
                 idx = pencarian.index[0]
-                target = df_sementara.at[idx, 'Target IBT']
-                hasil_lama = int(df_sementara.at[idx, 'Hasil Cek Store'])
+                target = int(df_terbaru.at[idx, 'Target IBT'])
+                hasil_lama = int(df_terbaru.at[idx, 'Hasil Cek Store'])
                 hasil_baru = hasil_lama + qty_input
                 status_baru = "✅ Sesuai" if hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
                 
-                # UPDATE GOOGLE SHEETS
+                # UPDATE GOOGLE SHEETS SECARA REAL-TIME
                 row_in_sheet = int(idx) + 2 
                 sheet.update_cell(row_in_sheet, 6, hasil_baru)
                 sheet.update_cell(row_in_sheet, 7, status_baru)
                 
-                st.success(f"Berhasil! {qty_input} pcs {df_sementara.at[idx, 'Nama Barang']} ditambahkan.")
+                st.success(f"Berhasil! {qty_input} pcs {df_terbaru.at[idx, 'Nama Barang']} ditambahkan.")
             else:
                 st.error(f"❌ Barcode {barcode_manual} TIDAK ADA dalam IBT {pilih_ibt}!")
     else:
-        st.warning("Database kosong. Hubungi Admin untuk meng-upload PDF.")
+        st.warning("⚠️ Database masih kosong. Minta Admin untuk meng-upload file PDF terlebih dahulu di komputer.")
