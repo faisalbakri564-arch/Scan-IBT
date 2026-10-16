@@ -165,7 +165,7 @@ elif st.session_state['role'] == "Staff":
                 <div id="qr-reader" style="width:100%; max-width:500px; margin:auto; border-radius:10px; border:2px solid #ddd; overflow:hidden;"></div>
                 <div style="text-align: center; margin-top: 15px;">
                     <button id="btn-switch" style="padding: 10px 20px; font-size: 14px; background-color: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                        🔄 Ganti Kamera Depan/Belakang
+                        🔄 Ganti Kamera
                     </button>
                 </div>
                 <script src="https://unpkg.com/html5-qrcode"></script>
@@ -174,11 +174,39 @@ elif st.session_state['role'] == "Staff":
                         if (document.readyState === "complete" || document.readyState === "interactive") { setTimeout(fn, 1); } 
                         else { document.addEventListener("DOMContentLoaded", fn); }
                     }
+                    
+                    // FUNGSI SUARA & GETAR LANGSUNG DARI HARDWARE HP
+                    function playBeep() {
+                        try {
+                            const AudioContext = window.AudioContext || window.webkitAudioContext;
+                            const audioCtx = new AudioContext();
+                            const oscillator = audioCtx.createOscillator();
+                            const gainNode = audioCtx.createGain();
+                            
+                            oscillator.type = 'sine';
+                            oscillator.frequency.setValueAtTime(1000, audioCtx.currentTime); // Frekuensi BEEP
+                            
+                            gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
+                            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15); // Bunyi sangat cepat
+                            
+                            oscillator.connect(gainNode);
+                            gainNode.connect(audioCtx.destination);
+                            
+                            oscillator.start();
+                            oscillator.stop(audioCtx.currentTime + 0.15);
+                        } catch(e) { console.log("Audio API not supported"); }
+                        
+                        // Efek Getar HP 200ms
+                        if (navigator.vibrate) {
+                            navigator.vibrate(200);
+                        }
+                    }
+
                     docReady(function () {
                         let currentFacingMode = "environment";
                         let isScanning = false;
                         
-                        // FOKUS HANYA KE BARCODE RITEL (Bikin kecepatan scan naik drastis)
+                        // HANYA MENCARI BARCODE BARANG/KARDUS (Bikin scan jauh lebih responsif)
                         const formatsToSupport = [
                             Html5QrcodeSupportedFormats.EAN_13,
                             Html5QrcodeSupportedFormats.EAN_8,
@@ -189,8 +217,7 @@ elif st.session_state['role'] == "Staff":
                         const html5QrCode = new Html5Qrcode("qr-reader", { formatsToSupport: formatsToSupport });
 
                         function onScanSuccess(decodedText, decodedResult) {
-                            var audio = new Audio('https://www.soundjay.com/buttons/sounds/button-09.mp3');
-                            audio.play();
+                            playBeep(); // Panggil fungsi suara & getar
                             
                             if (isScanning) {
                                 html5QrCode.stop().then(() => {
@@ -216,9 +243,9 @@ elif st.session_state['role'] == "Staff":
                             html5QrCode.start(
                                 { facingMode: currentFacingMode },
                                 { 
-                                    fps: 30, // Kecepatan Frame ditingkatkan 3x lipat
-                                    qrbox: { width: 300, height: 150 }, // Bentuk diubah jadi persegi panjang memanjang
-                                    disableFlip: false
+                                    fps: 15, // Optimal untuk browser HP (tidak memberatkan CPU)
+                                    qrbox: { width: 250, height: 100 }, // Kotak tipis memaksa fokus pas di garis barcode
+                                    disableFlip: true // MATIKAN MIRRORING agar HP tidak nge-lag
                                 },
                                 onScanSuccess,
                                 (errorMessage) => { }
