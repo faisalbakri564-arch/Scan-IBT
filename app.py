@@ -153,7 +153,6 @@ elif st.session_state['role'] == "Staff":
         
         st.write("📷 **Live Barcode Scanner**")
         
-        # Tombol untuk memunculkan Scanner agar perizinan tidak otomatis
         if "tampilkan_scanner" not in st.session_state:
             st.session_state["tampilkan_scanner"] = False
             
@@ -161,7 +160,6 @@ elif st.session_state['role'] == "Staff":
             st.session_state["tampilkan_scanner"] = True
             
         if st.session_state["tampilkan_scanner"]:
-            # HTML5 Live Scanner Injection dengan Tombol Flip Kamera
             components.html(
                 """
                 <div id="qr-reader" style="width:100%; max-width:500px; margin:auto; border-radius:10px; border:2px solid #ddd; overflow:hidden;"></div>
@@ -177,9 +175,18 @@ elif st.session_state['role'] == "Staff":
                         else { document.addEventListener("DOMContentLoaded", fn); }
                     }
                     docReady(function () {
-                        let currentFacingMode = "environment"; // Otomatis tembak kamera belakang
+                        let currentFacingMode = "environment";
                         let isScanning = false;
-                        const html5QrCode = new Html5Qrcode("qr-reader");
+                        
+                        // FOKUS HANYA KE BARCODE RITEL (Bikin kecepatan scan naik drastis)
+                        const formatsToSupport = [
+                            Html5QrcodeSupportedFormats.EAN_13,
+                            Html5QrcodeSupportedFormats.EAN_8,
+                            Html5QrcodeSupportedFormats.CODE_128,
+                            Html5QrcodeSupportedFormats.UPC_A
+                        ];
+
+                        const html5QrCode = new Html5Qrcode("qr-reader", { formatsToSupport: formatsToSupport });
 
                         function onScanSuccess(decodedText, decodedResult) {
                             var audio = new Audio('https://www.soundjay.com/buttons/sounds/button-09.mp3');
@@ -188,7 +195,7 @@ elif st.session_state['role'] == "Staff":
                             if (isScanning) {
                                 html5QrCode.stop().then(() => {
                                     isScanning = false;
-                                    document.getElementById('qr-reader').innerHTML = `<h3 style="color:green; text-align:center; padding:20px;">✅ Terscan: ${decodedText}</h3><p style="text-align:center;">Data masuk ke kolom di bawah. Silakan klik tombol <b>Simpan Data</b>.</p>`;
+                                    document.getElementById('qr-reader').innerHTML = `<h3 style="color:green; text-align:center; padding:20px;">✅ ${decodedText}</h3>`;
                                     document.getElementById('btn-switch').style.display = 'none';
                                 });
                             }
@@ -208,18 +215,20 @@ elif st.session_state['role'] == "Staff":
                         function startCamera() {
                             html5QrCode.start(
                                 { facingMode: currentFacingMode },
-                                { fps: 10, qrbox: { width: 250, height: 250 } },
+                                { 
+                                    fps: 30, // Kecepatan Frame ditingkatkan 3x lipat
+                                    qrbox: { width: 300, height: 150 }, // Bentuk diubah jadi persegi panjang memanjang
+                                    disableFlip: false
+                                },
                                 onScanSuccess,
-                                (errorMessage) => { /* abaikan frame kosong */ }
+                                (errorMessage) => { }
                             ).then(() => {
                                 isScanning = true;
                             }).catch((err) => {
-                                console.log(err);
-                                document.getElementById('qr-reader').innerHTML = `<p style="color:red; text-align:center;">Gagal mengakses kamera. Pastikan izin kamera sudah diberikan di browser.</p>`;
+                                document.getElementById('qr-reader').innerHTML = `<p style="color:red; text-align:center;">Gagal mengakses kamera.</p>`;
                             });
                         }
 
-                        // Logika Tombol Ganti Kamera
                         document.getElementById('btn-switch').addEventListener('click', () => {
                             if (isScanning) {
                                 html5QrCode.stop().then(() => {
@@ -237,7 +246,7 @@ elif st.session_state['role'] == "Staff":
                     });
                 </script>
                 """,
-                height=550,
+                height=500,
             )
             if st.button("Tutup Scanner"):
                 st.session_state["tampilkan_scanner"] = False
