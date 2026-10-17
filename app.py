@@ -39,7 +39,7 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-# --- FUNGSI BACA PDF (DISESUAIKAN DENGAN TABEL IBT) ---
+# --- FUNGSI BACA PDF (DIJAMIN BERSIH DARI EA & HARGA) ---
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
     metadata = {"IBT No": "-"}
@@ -53,39 +53,40 @@ def baca_pdf_ibt_multi(file_pdf):
             
             baris_teks = teks.split("\n")
             for baris in baris_teks:
-                # Pola Tabel: [No] [Sub Category] [Item Code (6-7 digit)] [Barcode (12-13 digit)] [Item Name...]
-                # Contoh baris: 2 101010|DERMA... 3124761 3337875829007 CERAVE...
-                cocok = re.search(r'\d+\s+.*?\s+(\d{6,7})\s+(\d{12,13})\s+(.*?)(?=\s+Total:|\s*$)', baris)
+                # Pola presisi: [Item Code (6-7 digit)] [Barcode (12-13 digit)] [Nama Barang...] [EA] [Target Qty]
+                # Kita potong tepat sebelum kata "EA" dan angka kuantitas di belakangnya
+                cocok = re.search(r'\d+\s+.*?\s+(\d{6,7})\s+(\d{12,13})\s+(.*?)\s+EA\s+(\d+)', baris)
                 
                 if cocok:
                     item_code = cocok.group(1)
                     barcode = cocok.group(2)
-                    nama_barang = cocok.group(3).strip()
+                    nama_bersih = cocok.group(3).strip()
+                    target_qty = int(cocok.group(4))
                     
                     data_barang.append({
                         "IBT No": metadata["IBT No"],
                         "Barcode": barcode,
                         "PLU / Item Code": item_code,
-                        "Nama Barang": nama_barang,
-                        "Target IBT": 1, # Default kuantitas baris tabel IBT Guardian
+                        "Nama Barang": nama_bersih,
+                        "Target IBT": target_qty, # Mengambil Target Qty asli dari PDF
                         "Hasil Cek Store": 0,
                         "Status": "Belum Dicek"
                     })
                 else:
-                    # Pola Alternatif jika format teks menyatu
-                    # Mencari angka Item Code (6-7 digit) diikuti Barcode (12-13 digit)
-                    cocok_alt = re.search(r'(\d{6,7})\s+(\d{12,13})\s+(.*)', baris)
+                    # Pola alternatif jika nomor urut tabel tidak terbaca
+                    cocok_alt = re.search(r'(\d{6,7})\s+(\d{12,13})\s+(.*?)\s+EA\s+(\d+)', baris)
                     if cocok_alt:
                         item_code = cocok_alt.group(1)
                         barcode = cocok_alt.group(2)
-                        sisa_teks = cocok_alt.group(3).strip()
+                        nama_bersih = cocok_alt.group(3).strip()
+                        target_qty = int(cocok_alt.group(4))
                         
                         data_barang.append({
                             "IBT No": metadata["IBT No"],
                             "Barcode": barcode,
                             "PLU / Item Code": item_code,
-                            "Nama Barang": sisa_teks,
-                            "Target IBT": 1,
+                            "Nama Barang": nama_bersih,
+                            "Target IBT": target_qty,
                             "Hasil Cek Store": 0,
                             "Status": "Belum Dicek"
                         })
@@ -356,11 +357,11 @@ elif st.session_state['role'] == "Staff":
             
             if not pencarian.empty:
                 idx = pencarian.index[0]
-                target = 1 # Target disesuaikan
+                target = int(df_live.at[idx, 'Target IBT'])
                 hasil_lama = int(df_live.at[idx, 'Hasil Cek Store'])
                 hasil_baru = hasil_lama + qty_input
                 
-                status_baru = "✅ Sesuai" if hasil_baru == target else "⚠️ Over-receive"
+                status_baru = "✅ Sesuai" if hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
                 
                 df_live.at[idx, 'Hasil Cek Store'] = hasil_baru
                 df_live.at[idx, 'Status'] = status_baru
