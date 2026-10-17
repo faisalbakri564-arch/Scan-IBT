@@ -39,7 +39,7 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-# --- FUNGSI BACA PDF (MENANGKAP NAMA LENGKAP & RSP) ---
+# --- FUNGSI BACA PDF ---
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
     metadata = {"IBT No": "-"}
@@ -47,17 +47,11 @@ def baca_pdf_ibt_multi(file_pdf):
         for halaman in pdf.pages:
             teks = halaman.extract_text()
             
-            # Cari Nomor IBT
             match_ibt = re.search(r'IBT No\.:\s*(\S+)', teks)
             if match_ibt: metadata["IBT No"] = match_ibt.group(1)
             
             baris_teks = teks.split("\n")
             for baris in baris_teks:
-                # Pola presisi tabel IBT Guardian:
-                # [No] [Sub Category] [Item Code (6-7 digit)] [Barcode (12-13 digit)] [Nama Barang...] [EA] [Qty] [Harga Satuan] [Total Harga]
-                # Contoh: 1 101010|... 3123922 3337875909235 LA ROCHE POSAY PURE VIT C12 SRM30ML EA 6 6 859.000 5.154.000
-                
-                # Regex untuk mengambil Item Code, Barcode, Nama Barang Lengkap, Target Qty, dan Harga Satuan (RSP)
                 cocok = re.search(r'\d+\s+.*?\s+(\d{6,7})\s+(\d{12,13})\s+(.*?)\s+EA\s+\d+\s+\d+\s+([\d.]+)', baris)
                 
                 if cocok:
@@ -65,11 +59,9 @@ def baca_pdf_ibt_multi(file_pdf):
                     barcode = cocok.group(2)
                     nama_lengkap = cocok.group(3).strip()
                     
-                    # Mengambil harga satuan (RSP) dan membersihkan titiknya menjadi angka desimal/integer
                     rsp_str = cocok.group(4).replace('.', '')
                     rsp_val = float(rsp_str) if rsp_str.isdigit() else 0.0
                     
-                    # Mencari target quantity (biasanya angka tunggal sebelum harga)
                     match_qty = re.search(r'EA\s+(\d+)\s+', baris)
                     target_qty = int(match_qty.group(1)) if match_qty else 1
                     
@@ -81,7 +73,7 @@ def baca_pdf_ibt_multi(file_pdf):
                         "Target IBT": target_qty,
                         "Hasil Cek Store": 0,
                         "RSP (Satuan)": rsp_val,
-                        "Total RSP": 0.0, # Akan dihitung otomatis (Hasil Cek Store * RSP)
+                        "Total RSP": 0.0,
                         "Status": "Belum Dicek"
                     })
     return pd.DataFrame(data_barang)
@@ -127,7 +119,6 @@ elif st.session_state['role'] == "Admin":
                     semua_df.append(baca_pdf_ibt_multi(file))
                 if semua_df:
                     df_gabung = pd.concat(semua_df, ignore_index=True)
-                    # Hitung Total RSP awal
                     df_gabung['Total RSP'] = df_gabung['Hasil Cek Store'] * df_gabung['RSP (Satuan)']
                     save_data(df_gabung)
                     st.success("✅ Data berhasil disimpan di server lokal! Staf HP sudah bisa mengecek.")
@@ -167,17 +158,48 @@ elif st.session_state['role'] == "Admin":
             
             df_edit = st.data_editor(df_filter, use_container_width=True)
             
-            # Hitung ulang Total RSP otomatis berdasarkan Hasil Cek Store yang diedit/discan
+            # Hitung ulang Total RSP & pastikan status murni berupa teks biasa tanpa ikon
             df_edit['Total RSP'] = df_edit['Hasil Cek Store'] * df_edit['RSP (Satuan)']
             
+            for i in df_edit.index:
+                target = int(df_edit.at[i, 'Target IBT'])
+                hasil = int(df_edit.at[i, 'Hasil Cek Store'])
+                if hasil == target:
+                    df_edit.at[i, 'Status'] = "Sesuai"
+                elif hasil > target:
+                    df_edit.at[i, 'Status'] = "Over-receive"
+                elif hasil > 0:
+                    df_edit.at[i, 'Status'] = "Kurang"
+                else:
+                    df_edit.at[i, 'Status'] = "Belum Dicek"
+
             df_curr.update(df_edit)
             save_data(df_curr)
             
             st.markdown("---")
             
+            # Mempersiapkan File Excel dengan Baris Total di Bawahnya
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_edit.to_excel(writer, index=False, sheet_name='Laporan_Receiving')
+                # Membuat salinan dataframe untuk Excel dan menambahkan baris total
+                df_excel = df_edit.copy()
+                total_rsp_sum = df_excel['Total RSP'].sum()
+                
+                # Baris ringkasan total di ujung bawah tabel
+                baris_total = pd.DataFrame([{
+                    "IBT No": "TOTAL KESELURUHAN",
+                    "Barcode": "",
+                    "PLU / Item Code": "",
+                    "Nama Barang": "",
+                    "Target IBT": df_excel['Target IBT'].sum(),
+                    "Hasil Cek Store": df_excel['Hasil Cek Store'].sum(),
+                    "RSP (Satuan)": "",
+                    "Total RSP": total_rsp_sum,
+                    "Status": ""
+                }])
+                
+                df_excel = pd.concat([df_excel, baris_total], ignore_index=True)
+                df_excel.to_excel(writer, index=False, sheet_name='Laporan_Receiving')
             
             nama_file = 'Hasil_Receiving_Semua.xlsx' if pilih_ibt_admin == "Semua IBT" else f'Hasil_Receiving_{pilih_ibt_admin}.xlsx'
             
@@ -359,12 +381,12 @@ elif st.session_state['role'] == "Staff":
                 hasil_lama = int(df_live.at[idx, 'Hasil Cek Store'])
                 hasil_baru = hasil_lama + qty_input
                 
-                status_baru = "✅ Sesuai" if hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
+                # Status murni teks biasa tanpa ikon apa pun
+                status_baru = "Sesuai" if hasil_baru == target else ("Over-receive" if hasil_baru > target else "Kurang")
                 
                 df_live.at[idx, 'Hasil Cek Store'] = hasil_baru
                 df_live.at[idx, 'Status'] = status_baru
                 
-                # Hitung otomatis Total RSP (Hasil Cek Store * RSP Satuan)
                 rsp_satuan = float(df_live.at[idx, 'RSP (Satuan)'])
                 df_live.at[idx, 'Total RSP'] = hasil_baru * rsp_satuan
                 
