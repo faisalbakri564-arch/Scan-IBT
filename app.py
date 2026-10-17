@@ -39,7 +39,7 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-# --- FUNGSI BACA PDF (DIJAMIN BERSIH DARI EA & HARGA) ---
+# --- FUNGSI BACA PDF (MENANGKAP NAMA LENGKAP & RSP) ---
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
     metadata = {"IBT No": "-"}
@@ -53,44 +53,37 @@ def baca_pdf_ibt_multi(file_pdf):
             
             baris_teks = teks.split("\n")
             for baris in baris_teks:
-                # Pola presisi: [Item Code (6-7 digit)] [Barcode (12-13 digit)] [Nama Barang...] [EA] [Target Qty]
-                # Kita potong tepat sebelum kata "EA" dan angka kuantitas di belakangnya
-                cocok = re.search(r'\d+\s+.*?\s+(\d{6,7})\s+(\d{12,13})\s+(.*?)\s+EA\s+(\d+)', baris)
+                # Pola presisi tabel IBT Guardian:
+                # [No] [Sub Category] [Item Code (6-7 digit)] [Barcode (12-13 digit)] [Nama Barang...] [EA] [Qty] [Harga Satuan] [Total Harga]
+                # Contoh: 1 101010|... 3123922 3337875909235 LA ROCHE POSAY PURE VIT C12 SRM30ML EA 6 6 859.000 5.154.000
+                
+                # Regex untuk mengambil Item Code, Barcode, Nama Barang Lengkap, Target Qty, dan Harga Satuan (RSP)
+                cocok = re.search(r'\d+\s+.*?\s+(\d{6,7})\s+(\d{12,13})\s+(.*?)\s+EA\s+\d+\s+\d+\s+([\d.]+)', baris)
                 
                 if cocok:
                     item_code = cocok.group(1)
                     barcode = cocok.group(2)
-                    nama_bersih = cocok.group(3).strip()
-                    target_qty = int(cocok.group(4))
+                    nama_lengkap = cocok.group(3).strip()
+                    
+                    # Mengambil harga satuan (RSP) dan membersihkan titiknya menjadi angka desimal/integer
+                    rsp_str = cocok.group(4).replace('.', '')
+                    rsp_val = float(rsp_str) if rsp_str.isdigit() else 0.0
+                    
+                    # Mencari target quantity (biasanya angka tunggal sebelum harga)
+                    match_qty = re.search(r'EA\s+(\d+)\s+', baris)
+                    target_qty = int(match_qty.group(1)) if match_qty else 1
                     
                     data_barang.append({
                         "IBT No": metadata["IBT No"],
                         "Barcode": barcode,
                         "PLU / Item Code": item_code,
-                        "Nama Barang": nama_bersih,
-                        "Target IBT": target_qty, # Mengambil Target Qty asli dari PDF
+                        "Nama Barang": nama_lengkap,
+                        "Target IBT": target_qty,
                         "Hasil Cek Store": 0,
+                        "RSP (Satuan)": rsp_val,
+                        "Total RSP": 0.0, # Akan dihitung otomatis (Hasil Cek Store * RSP)
                         "Status": "Belum Dicek"
                     })
-                else:
-                    # Pola alternatif jika nomor urut tabel tidak terbaca
-                    cocok_alt = re.search(r'(\d{6,7})\s+(\d{12,13})\s+(.*?)\s+EA\s+(\d+)', baris)
-                    if cocok_alt:
-                        item_code = cocok_alt.group(1)
-                        barcode = cocok_alt.group(2)
-                        nama_bersih = cocok_alt.group(3).strip()
-                        target_qty = int(cocok_alt.group(4))
-                        
-                        data_barang.append({
-                            "IBT No": metadata["IBT No"],
-                            "Barcode": barcode,
-                            "PLU / Item Code": item_code,
-                            "Nama Barang": nama_bersih,
-                            "Target IBT": target_qty,
-                            "Hasil Cek Store": 0,
-                            "Status": "Belum Dicek"
-                        })
-                        
     return pd.DataFrame(data_barang)
 
 # ==========================================
@@ -134,6 +127,8 @@ elif st.session_state['role'] == "Admin":
                     semua_df.append(baca_pdf_ibt_multi(file))
                 if semua_df:
                     df_gabung = pd.concat(semua_df, ignore_index=True)
+                    # Hitung Total RSP awal
+                    df_gabung['Total RSP'] = df_gabung['Hasil Cek Store'] * df_gabung['RSP (Satuan)']
                     save_data(df_gabung)
                     st.success("✅ Data berhasil disimpan di server lokal! Staf HP sudah bisa mengecek.")
             else:
@@ -171,6 +166,9 @@ elif st.session_state['role'] == "Admin":
             st.write("Silakan koreksi jumlah Qty jika ada selisih sebelum mendownload:")
             
             df_edit = st.data_editor(df_filter, use_container_width=True)
+            
+            # Hitung ulang Total RSP otomatis berdasarkan Hasil Cek Store yang diedit/discan
+            df_edit['Total RSP'] = df_edit['Hasil Cek Store'] * df_edit['RSP (Satuan)']
             
             df_curr.update(df_edit)
             save_data(df_curr)
@@ -365,6 +363,11 @@ elif st.session_state['role'] == "Staff":
                 
                 df_live.at[idx, 'Hasil Cek Store'] = hasil_baru
                 df_live.at[idx, 'Status'] = status_baru
+                
+                # Hitung otomatis Total RSP (Hasil Cek Store * RSP Satuan)
+                rsp_satuan = float(df_live.at[idx, 'RSP (Satuan)'])
+                df_live.at[idx, 'Total RSP'] = hasil_baru * rsp_satuan
+                
                 save_data(df_live)
                 
                 st.success(f"Berhasil! {qty_input} pcs {df_live.at[idx, 'Nama Barang']} ditambahkan.")
