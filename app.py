@@ -113,24 +113,63 @@ elif st.session_state['role'] == "Admin":
                 st.warning("Pilih file PDF dulu!")
                 
         st.markdown("---")
-        st.write("Data Saat Ini di Database:")
+        
+        # Fitur Tarik Data Real-Time di Tab Upload
+        col_live1, col_live2 = st.columns([8, 2])
+        with col_live1:
+            st.write("Data Saat Ini di Database:")
+        with col_live2:
+            if st.button("🔄 Muat Ulang Scanner", use_container_width=True):
+                st.rerun()
+                
         st.dataframe(load_data(), use_container_width=True)
 
     with tab3:
         st.header("Koreksi & Download Laporan Akhir")
         df_curr = load_data()
-        if not df_curr.empty:
-            df_edit = st.data_editor(df_curr, num_rows="dynamic", use_container_width=True)
-            save_data(df_edit)
+        
+        if not df_curr.empty and 'IBT No' in df_curr.columns:
+            # FITUR BARU: Dropdown Filter per IBT
+            daftar_ibt = ["Semua IBT"] + list(df_curr['IBT No'].unique())
+            pilih_ibt_admin = st.selectbox("📌 Pilih dokumen IBT yang ingin diproses/didownload:", daftar_ibt)
             
+            # Logika Filter Tabel
+            if pilih_ibt_admin == "Semua IBT":
+                df_filter = df_curr
+            else:
+                df_filter = df_curr[df_curr['IBT No'] == pilih_ibt_admin]
+                
+            st.markdown("---")
+            
+            # Tombol Tarik Data Terbaru
+            if st.button(f"🔄 Tarik Data Scan Terbaru untuk {pilih_ibt_admin}"):
+                st.rerun()
+
+            st.write("Silakan koreksi jumlah Qty jika ada selisih sebelum mendownload:")
+            
+            # Tabel Edit (Sekarang hanya menampilkan yang difilter)
+            df_edit = st.data_editor(df_filter, use_container_width=True)
+            
+            # Menyimpan Koreksi Admin khusus pada baris yang difilter ke database utama
+            df_curr.update(df_edit)
+            save_data(df_curr)
+            
+            st.markdown("---")
+            
+            # Pembuatan File Excel Khusus yang difilter
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_edit.to_excel(writer, index=False, sheet_name='Laporan_Receiving')
+            
+            # Penamaan File Otomatis Berdasarkan Filter
+            nama_file = 'Hasil_Receiving_Semua.xlsx' if pilih_ibt_admin == "Semua IBT" else f'Hasil_Receiving_{pilih_ibt_admin}.xlsx'
+            
             st.download_button(
-                label="📊 Download Laporan (Excel)",
+                label=f"📊 Download Laporan ({pilih_ibt_admin})",
                 data=output.getvalue(),
-                file_name='Hasil_Receiving_Akhir.xlsx',
+                file_name=nama_file,
                 mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                type="primary"
             )
         else:
             st.info("Belum ada data.")
@@ -210,7 +249,6 @@ elif st.session_state['role'] == "Staff":
                             Html5QrcodeSupportedFormats.UPC_A
                         ];
 
-                        // MENGAKTIFKAN HARDWARE DETECTOR (Sangat Akurat)
                         const html5QrCode = new Html5Qrcode("qr-reader", { 
                             formatsToSupport: formatsToSupport,
                             experimentalFeatures: { useBarCodeDetectorIfSupported: true }
@@ -219,7 +257,6 @@ elif st.session_state['role'] == "Staff":
                         function onScanSuccess(decodedText, decodedResult) {
                             let currentTime = new Date().getTime();
                             
-                            // Jeda memori 2 detik supaya tidak spam beep pada barang yang sama
                             if (decodedText === lastScannedText && (currentTime - lastScanTime) < 2000) {
                                 return;
                             }
@@ -240,8 +277,6 @@ elif st.session_state['role'] == "Staff":
                                     input.dispatchEvent(ev);
                                 }
                             });
-                            
-                            // KAMERA TIDAK LAGI DIMATIKAN DISINI (Continuous mode aktif)
                         }
 
                         function startCamera() {
