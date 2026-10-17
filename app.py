@@ -39,7 +39,7 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-# --- FUNGSI BACA PDF (SUDAH DISESUAIKAN UNTUK ITEM CODE) ---
+# --- FUNGSI BACA PDF (DISESUAIKAN DENGAN TABEL IBT) ---
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
     metadata = {"IBT No": "-"}
@@ -53,42 +53,43 @@ def baca_pdf_ibt_multi(file_pdf):
             
             baris_teks = teks.split("\n")
             for baris in baris_teks:
-                # RegEx yang lebih luas: Menangkap Barcode (13 digit), Item Code/PLU, Nama, dan Target Qty.
-                # Karena format asli IBT Guardian bisa bervariasi, kita ambil blok angka di depan nama barang sebagai Item Code
-                cocok = re.search(r'(\d{13})\s+.*?(?:\s+)(\d{5,8})\s+(.*?)\s+EA\s+(\d+)\s+(\d+)', baris)
+                # Pola Tabel: [No] [Sub Category] [Item Code (6-7 digit)] [Barcode (12-13 digit)] [Item Name...]
+                # Contoh baris: 2 101010|DERMA... 3124761 3337875829007 CERAVE...
+                cocok = re.search(r'\d+\s+.*?\s+(\d{6,7})\s+(\d{12,13})\s+(.*?)(?=\s+Total:|\s*$)', baris)
                 
-                # Jika format default IBT: "Barcode   PLU   Nama Barang   Satuan   Target   Dikirim"
                 if cocok:
-                     data_barang.append({
+                    item_code = cocok.group(1)
+                    barcode = cocok.group(2)
+                    nama_barang = cocok.group(3).strip()
+                    
+                    data_barang.append({
                         "IBT No": metadata["IBT No"],
-                        "Barcode": cocok.group(1),
-                        "PLU / Item Code": cocok.group(2), # Angka PLU/Item Code
-                        "Nama Barang": cocok.group(3).strip(),
-                        "Target IBT": int(cocok.group(5)),
+                        "Barcode": barcode,
+                        "PLU / Item Code": item_code,
+                        "Nama Barang": nama_barang,
+                        "Target IBT": 1, # Default kuantitas baris tabel IBT Guardian
                         "Hasil Cek Store": 0,
                         "Status": "Belum Dicek"
                     })
                 else:
-                    # Alternatif RegEx jika urutan kolomnya berbeda, mengambil angka apa pun sebelum nama barang sebagai PLU
-                    cocok_alt = re.search(r'(\d{13})\s+(.*?)\s+EA\s+(\d+)\s+(\d+)', baris)
+                    # Pola Alternatif jika format teks menyatu
+                    # Mencari angka Item Code (6-7 digit) diikuti Barcode (12-13 digit)
+                    cocok_alt = re.search(r'(\d{6,7})\s+(\d{12,13})\s+(.*)', baris)
                     if cocok_alt:
-                        # Jika Regex utama gagal menangkap PLU (karena spasi tidak beraturan), 
-                        # kita pisahkan manual nama barang dan angka di depannya
-                        nama_mentah = cocok_alt.group(2).strip()
-                        plu_ekstrak = re.search(r'^(\d+)\s+(.*)', nama_mentah)
-                        
-                        plu_akhir = plu_ekstrak.group(1) if plu_ekstrak else "-"
-                        nama_akhir = plu_ekstrak.group(2) if plu_ekstrak else nama_mentah
+                        item_code = cocok_alt.group(1)
+                        barcode = cocok_alt.group(2)
+                        sisa_teks = cocok_alt.group(3).strip()
                         
                         data_barang.append({
                             "IBT No": metadata["IBT No"],
-                            "Barcode": cocok_alt.group(1),
-                            "PLU / Item Code": plu_akhir,
-                            "Nama Barang": nama_akhir.strip(),
-                            "Target IBT": int(cocok_alt.group(4)),
+                            "Barcode": barcode,
+                            "PLU / Item Code": item_code,
+                            "Nama Barang": sisa_teks,
+                            "Target IBT": 1,
                             "Hasil Cek Store": 0,
                             "Status": "Belum Dicek"
                         })
+                        
     return pd.DataFrame(data_barang)
 
 # ==========================================
@@ -207,7 +208,6 @@ elif st.session_state['role'] == "Staff":
         pilih_ibt = st.selectbox("📌 Pilih dokumen IBT yang kamu bongkar:", daftar_ibt)
         st.markdown("---")
         
-        # Fitur Buka/Tutup Scanner
         st.write("📷 **Kamera Scanner (Opsional)**")
         
         if "tampilkan_scanner" not in st.session_state:
@@ -339,9 +339,8 @@ elif st.session_state['role'] == "Staff":
         st.markdown("---")
         st.write("📦 **Input Barang ke Database**")
         
-        # Form Input Cerdas (Barcode atau PLU)
         with st.form(key='form_scan', clear_on_submit=True):
-            input_manual = st.text_input("Ketik Barcode atau Item Code (PLU):", placeholder="Contoh: 9555237206059 atau 1018665")
+            input_manual = st.text_input("Ketik Barcode atau Item Code (PLU):", placeholder="Contoh: 3337875829007 atau 3124761")
             qty_input = st.number_input("Jumlah (Qty):", min_value=1, value=1, step=1)
             submit_scan = st.form_submit_button("➕ Simpan Data", use_container_width=True)
 
@@ -349,7 +348,6 @@ elif st.session_state['role'] == "Staff":
             input_manual = input_manual.strip()
             df_live = load_data()
             
-            # Cek di kolom Barcode ATAU kolom PLU / Item Code
             kondisi_ibt = df_live['IBT No'] == pilih_ibt
             kondisi_barcode = df_live['Barcode'].astype(str) == input_manual
             kondisi_plu = df_live['PLU / Item Code'].astype(str) == input_manual
@@ -358,11 +356,11 @@ elif st.session_state['role'] == "Staff":
             
             if not pencarian.empty:
                 idx = pencarian.index[0]
-                target = int(df_live.at[idx, 'Target IBT'])
+                target = 1 # Target disesuaikan
                 hasil_lama = int(df_live.at[idx, 'Hasil Cek Store'])
                 hasil_baru = hasil_lama + qty_input
                 
-                status_baru = "✅ Sesuai" if hasil_baru == target else ("⚠️ Over-receive" if hasil_baru > target else "⏳ Kurang")
+                status_baru = "✅ Sesuai" if hasil_baru == target else "⚠️ Over-receive"
                 
                 df_live.at[idx, 'Hasil Cek Store'] = hasil_baru
                 df_live.at[idx, 'Status'] = status_baru
