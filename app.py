@@ -39,31 +39,56 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-# --- FUNGSI BACA PDF ---
+# --- FUNGSI BACA PDF (SUDAH DISESUAIKAN UNTUK ITEM CODE) ---
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
-    metadata = {"IBT No": "-", "ERP No": "-"}
+    metadata = {"IBT No": "-"}
     with pdfplumber.open(file_pdf) as pdf:
         for halaman in pdf.pages:
             teks = halaman.extract_text()
+            
+            # Cari Nomor IBT
             match_ibt = re.search(r'IBT No\.:\s*(\S+)', teks)
             if match_ibt: metadata["IBT No"] = match_ibt.group(1)
-            match_erp = re.search(r'ERP No\.:\s*([\d,]+)', teks)
-            if match_erp: metadata["ERP No"] = match_erp.group(1)
             
             baris_teks = teks.split("\n")
             for baris in baris_teks:
-                cocok = re.search(r'(\d{13})\s+(.*?)\s+EA\s+(\d+)\s+(\d+)', baris)
+                # RegEx yang lebih luas: Menangkap Barcode (13 digit), Item Code/PLU, Nama, dan Target Qty.
+                # Karena format asli IBT Guardian bisa bervariasi, kita ambil blok angka di depan nama barang sebagai Item Code
+                cocok = re.search(r'(\d{13})\s+.*?(?:\s+)(\d{5,8})\s+(.*?)\s+EA\s+(\d+)\s+(\d+)', baris)
+                
+                # Jika format default IBT: "Barcode   PLU   Nama Barang   Satuan   Target   Dikirim"
                 if cocok:
-                    data_barang.append({
+                     data_barang.append({
                         "IBT No": metadata["IBT No"],
-                        "ERP No": metadata["ERP No"],
                         "Barcode": cocok.group(1),
-                        "Nama Barang": cocok.group(2).strip(),
-                        "Target IBT": int(cocok.group(4)),
+                        "PLU / Item Code": cocok.group(2), # Angka PLU/Item Code
+                        "Nama Barang": cocok.group(3).strip(),
+                        "Target IBT": int(cocok.group(5)),
                         "Hasil Cek Store": 0,
                         "Status": "Belum Dicek"
                     })
+                else:
+                    # Alternatif RegEx jika urutan kolomnya berbeda, mengambil angka apa pun sebelum nama barang sebagai PLU
+                    cocok_alt = re.search(r'(\d{13})\s+(.*?)\s+EA\s+(\d+)\s+(\d+)', baris)
+                    if cocok_alt:
+                        # Jika Regex utama gagal menangkap PLU (karena spasi tidak beraturan), 
+                        # kita pisahkan manual nama barang dan angka di depannya
+                        nama_mentah = cocok_alt.group(2).strip()
+                        plu_ekstrak = re.search(r'^(\d+)\s+(.*)', nama_mentah)
+                        
+                        plu_akhir = plu_ekstrak.group(1) if plu_ekstrak else "-"
+                        nama_akhir = plu_ekstrak.group(2) if plu_ekstrak else nama_mentah
+                        
+                        data_barang.append({
+                            "IBT No": metadata["IBT No"],
+                            "Barcode": cocok_alt.group(1),
+                            "PLU / Item Code": plu_akhir,
+                            "Nama Barang": nama_akhir.strip(),
+                            "Target IBT": int(cocok_alt.group(4)),
+                            "Hasil Cek Store": 0,
+                            "Status": "Belum Dicek"
+                        })
     return pd.DataFrame(data_barang)
 
 # ==========================================
@@ -114,7 +139,6 @@ elif st.session_state['role'] == "Admin":
                 
         st.markdown("---")
         
-        # Fitur Tarik Data Real-Time di Tab Upload
         col_live1, col_live2 = st.columns([8, 2])
         with col_live1:
             st.write("Data Saat Ini di Database:")
@@ -129,11 +153,9 @@ elif st.session_state['role'] == "Admin":
         df_curr = load_data()
         
         if not df_curr.empty and 'IBT No' in df_curr.columns:
-            # FITUR BARU: Dropdown Filter per IBT
             daftar_ibt = ["Semua IBT"] + list(df_curr['IBT No'].unique())
             pilih_ibt_admin = st.selectbox("📌 Pilih dokumen IBT yang ingin diproses/didownload:", daftar_ibt)
             
-            # Logika Filter Tabel
             if pilih_ibt_admin == "Semua IBT":
                 df_filter = df_curr
             else:
@@ -141,27 +163,22 @@ elif st.session_state['role'] == "Admin":
                 
             st.markdown("---")
             
-            # Tombol Tarik Data Terbaru
             if st.button(f"🔄 Tarik Data Scan Terbaru untuk {pilih_ibt_admin}"):
                 st.rerun()
 
             st.write("Silakan koreksi jumlah Qty jika ada selisih sebelum mendownload:")
             
-            # Tabel Edit (Sekarang hanya menampilkan yang difilter)
             df_edit = st.data_editor(df_filter, use_container_width=True)
             
-            # Menyimpan Koreksi Admin khusus pada baris yang difilter ke database utama
             df_curr.update(df_edit)
             save_data(df_curr)
             
             st.markdown("---")
             
-            # Pembuatan File Excel Khusus yang difilter
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_edit.to_excel(writer, index=False, sheet_name='Laporan_Receiving')
             
-            # Penamaan File Otomatis Berdasarkan Filter
             nama_file = 'Hasil_Receiving_Semua.xlsx' if pilih_ibt_admin == "Semua IBT" else f'Hasil_Receiving_{pilih_ibt_admin}.xlsx'
             
             st.download_button(
@@ -190,16 +207,21 @@ elif st.session_state['role'] == "Staff":
         pilih_ibt = st.selectbox("📌 Pilih dokumen IBT yang kamu bongkar:", daftar_ibt)
         st.markdown("---")
         
-        st.write("📷 **Live Barcode Scanner (Non-Stop)**")
+        # Fitur Buka/Tutup Scanner
+        st.write("📷 **Kamera Scanner (Opsional)**")
         
         if "tampilkan_scanner" not in st.session_state:
             st.session_state["tampilkan_scanner"] = False
             
-        if st.button("🔴 Buka Layar Scanner"):
-            st.session_state["tampilkan_scanner"] = True
-            
-        if st.session_state["tampilkan_scanner"]:
-            # HTML5 Live Scanner Injection
+        if not st.session_state["tampilkan_scanner"]:
+            if st.button("📸 Hidupkan Scanner Kamera", type="primary"):
+                st.session_state["tampilkan_scanner"] = True
+                st.rerun()
+        else:
+            if st.button("❌ Matikan Kamera (Input Manual)"):
+                st.session_state["tampilkan_scanner"] = False
+                st.rerun()
+                
             components.html(
                 """
                 <div id="qr-reader" style="width:100%; max-width:500px; margin:auto; border-radius:10px; border:2px solid #ddd; overflow:hidden;"></div>
@@ -256,11 +278,9 @@ elif st.session_state['role'] == "Staff":
 
                         function onScanSuccess(decodedText, decodedResult) {
                             let currentTime = new Date().getTime();
-                            
                             if (decodedText === lastScannedText && (currentTime - lastScanTime) < 2000) {
                                 return;
                             }
-                            
                             lastScanTime = currentTime;
                             lastScannedText = decodedText;
                             playBeep(); 
@@ -270,7 +290,7 @@ elif st.session_state['role'] == "Staff":
                             const parentDoc = window.parent.document;
                             const inputs = parentDoc.querySelectorAll('input');
                             inputs.forEach(input => {
-                                if (input.getAttribute('aria-label') === 'Ketik 13 Digit Barcode:') {
+                                if (input.getAttribute('aria-label') === 'Ketik Barcode atau Item Code (PLU):') {
                                     let nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                                     nativeSetter.call(input, decodedText);
                                     let ev = new Event('input', { bubbles: true});
@@ -315,24 +335,26 @@ elif st.session_state['role'] == "Staff":
                 """,
                 height=530,
             )
-            if st.button("Tutup Scanner"):
-                st.session_state["tampilkan_scanner"] = False
-                st.rerun()
 
         st.markdown("---")
         st.write("📦 **Input Barang ke Database**")
+        
+        # Form Input Cerdas (Barcode atau PLU)
         with st.form(key='form_scan', clear_on_submit=True):
-            barcode_manual = st.text_input("Ketik 13 Digit Barcode:", placeholder="Akan terisi otomatis jika pakai scanner...")
+            input_manual = st.text_input("Ketik Barcode atau Item Code (PLU):", placeholder="Contoh: 9555237206059 atau 1018665")
             qty_input = st.number_input("Jumlah (Qty):", min_value=1, value=1, step=1)
             submit_scan = st.form_submit_button("➕ Simpan Data", use_container_width=True)
 
-        if submit_scan and barcode_manual:
-            barcode_manual = barcode_manual.strip()
+        if submit_scan and input_manual:
+            input_manual = input_manual.strip()
             df_live = load_data()
             
+            # Cek di kolom Barcode ATAU kolom PLU / Item Code
             kondisi_ibt = df_live['IBT No'] == pilih_ibt
-            kondisi_barcode = df_live['Barcode'].astype(str) == barcode_manual
-            pencarian = df_live[kondisi_ibt & kondisi_barcode]
+            kondisi_barcode = df_live['Barcode'].astype(str) == input_manual
+            kondisi_plu = df_live['PLU / Item Code'].astype(str) == input_manual
+            
+            pencarian = df_live[kondisi_ibt & (kondisi_barcode | kondisi_plu)]
             
             if not pencarian.empty:
                 idx = pencarian.index[0]
@@ -348,6 +370,6 @@ elif st.session_state['role'] == "Staff":
                 
                 st.success(f"Berhasil! {qty_input} pcs {df_live.at[idx, 'Nama Barang']} ditambahkan.")
             else:
-                st.error(f"❌ Barcode {barcode_manual} TIDAK ADA dalam IBT {pilih_ibt}!")
+                st.error(f"❌ Barang dengan kode '{input_manual}' TIDAK ADA dalam IBT {pilih_ibt}!")
     else:
         st.warning("⚠️ Database masih kosong. Minta Admin untuk meng-upload file PDF terlebih dahulu di komputer.")
