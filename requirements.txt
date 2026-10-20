@@ -4,3 +4,4 @@ pdfplumber
 python-barcode
 reportlab
 openpyxl
+pyxlsb
