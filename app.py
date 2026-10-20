@@ -180,7 +180,7 @@ if 'role' not in st.session_state:
     st.session_state['role'] = None
 
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/c/cb/Guardian_Pharmacy_logo.svg/1024px-Guardian_Pharmacy_logo.svg.png", width=150)
+    st.image("logo.png", width=150)
     st.title("Sistem Receiving IBT Guardian Makasar Hero Nipah Mall")
     st.markdown("---")
     
