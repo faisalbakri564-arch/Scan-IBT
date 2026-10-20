@@ -85,7 +85,7 @@ if 'role' not in st.session_state:
     st.session_state['role'] = None
 
 if st.session_state['role'] is None:
-    st.title("📦 Sistem Receiving IBT Guardian")
+    st.title("📦 Sistem Receiving IBT Guardian Makssar Hero Nipah Mall")
     st.write("Silakan pilih peran Anda:")
     col1, col2 = st.columns(2)
     with col1:
