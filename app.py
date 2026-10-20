@@ -2,13 +2,18 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 import re
-import io
 import os
+import io
+import barcode
+from barcode.writer import ImageWriter
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 import streamlit.components.v1 as components
 
-# Mengatur tampilan halaman web
+# Mengatur Tampilan Halaman Web
 st.set_page_config(page_title="Receiving IBT System", layout="wide", page_icon="📦")
-
 DB_FILE = "database_lokal.json"
 
 # --- FUNGSI DATABASE LOKAL & HAPUS DATA ---
@@ -30,41 +35,37 @@ def hapus_semua_data():
 # --- MENU SAMPING (SIDEBAR) UNTUK HAPUS DATA ---
 with st.sidebar:
     st.header("⚙️ Pengaturan Sistem")
-    st.write("Gunakan tombol ini untuk mereset aplikasi dan menghapus data yang tersimpan agar tidak ada jejak.")
+    st.write("Gunakan tombol ini untuk mereset aplikasi menghapus data.")
     if st.button("🗑️ Hapus Seluruh Data Sistem", type="primary", use_container_width=True):
         hapus_semua_data()
         st.session_state['role'] = None
-        st.success("✅ Seluruh data berhasil dihapus dari sistem!")
+        st.success("✅ Seluruh data berhasil dihapus!")
         import time
         time.sleep(1)
         st.rerun()
 
-# --- FUNGSI BACA PDF ---
+# --- FUNGSI BACA PDF (TANPA RSP, TAMBAH KONDISI BARANG) ---
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
     metadata = {"IBT No": "-"}
     with pdfplumber.open(file_pdf) as pdf:
         for halaman in pdf.pages:
             teks = halaman.extract_text()
-            
+
             match_ibt = re.search(r'IBT No\.:\s*(\S+)', teks)
             if match_ibt: metadata["IBT No"] = match_ibt.group(1)
-            
+
             baris_teks = teks.split("\n")
             for baris in baris_teks:
-                cocok = re.search(r'\d+\s+.*?\s+(\d{6,7})\s+(\d{12,13})\s+(.*?)\s+EA\s+\d+\s+\d+\s+([\d.]+)', baris)
-                
+                # Pola membaca Item Code, Barcode, Nama Barang, dan Target Qty
+                cocok = re.search(r'\d+\s+.*?\s+(\d{6,7})\s+(\d{12,13})\s+(.*?)\s+EA\s+(\d+)', baris)
+
                 if cocok:
                     item_code = cocok.group(1)
                     barcode = cocok.group(2)
                     nama_lengkap = cocok.group(3).strip()
-                    
-                    rsp_str = cocok.group(4).replace('.', '')
-                    rsp_val = float(rsp_str) if rsp_str.isdigit() else 0.0
-                    
-                    match_qty = re.search(r'EA\s+(\d+)\s+', baris)
-                    target_qty = int(match_qty.group(1)) if match_qty else 1
-                    
+                    target_qty = int(cocok.group(4))
+
                     data_barang.append({
                         "IBT No": metadata["IBT No"],
                         "Barcode": barcode,
@@ -72,11 +73,81 @@ def baca_pdf_ibt_multi(file_pdf):
                         "Nama Barang": nama_lengkap,
                         "Target IBT": target_qty,
                         "Hasil Cek Store": 0,
-                        "RSP (Satuan)": rsp_val,
-                        "Total RSP": 0.0,
+                        "Kondisi Barang / Reason": "",
                         "Status": "Belum Dicek"
                     })
     return pd.DataFrame(data_barang)
+
+# --- FUNGSI GENERATE PDF BERITA ACARA DENGAN TTD SL & AM ---
+def generate_pdf_report(df_filtered, ibt_no):
+    pdf_buffer = io.BytesIO()
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=16, alignment=1, spaceAfter=10)
+    normal_style = ParagraphStyle('NormalStyle', parent=styles['Normal'], fontSize=10)
+
+    elements.append(Paragraph(f"<b>BERITA ACARA RECEIVING IBT GUARDIAN</b>", title_style))
+    elements.append(Paragraph(f"<b>Nomor IBT:</b> {ibt_no}", normal_style))
+    elements.append(Spacer(1, 15))
+
+    # Generate Barcode IBT
+    try:
+        code128 = barcode.get('code128', ibt_no, writer=ImageWriter())
+        barcode_filename = f"barcode_{ibt_no}"
+        code128.save(barcode_filename)
+        elements.append(RLImage(barcode_filename + ".png", width=180, height=45))
+        elements.append(Spacer(1, 15))
+    except Exception:
+        pass
+
+    # Tabel Data
+    table_data = [["No", "PLU / Item Code", "Nama Barang", "Target", "Hasil Cek", "Kondisi / Reason", "Status"]]
+    for idx, row in df_filtered.reset_index(drop=True).iterrows():
+        table_data.append([
+            str(idx + 1),
+            str(row['PLU / Item Code']),
+            str(row['Nama Barang']),
+            str(row['Target IBT']),
+            str(row['Hasil Cek Store']),
+            str(row['Kondisi Barang / Reason']),
+            str(row['Status'])
+        ])
+
+    t = Table(table_data, colWidths=[25, 75, 185, 45, 55, 95, 60])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#003366')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 8),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+    ]))
+    elements.append(t)
+    elements.append(Spacer(1, 40))
+
+    # Kolom Tanda Tangan SL dan AM
+    sig_data = [
+        ["Mengetahui,", "Mengetahui,"],
+        ["", ""],
+        ["_________________________", "_________________________"],
+        ["Store Leader (SL)", "Area Manager (AM)"]
+    ]
+    sig_table = Table(sig_data, colWidths=[200, 200])
+    sig_table.setStyle(TableStyle([
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,0), (-1,-1), 10),
+        ('BOTTOMPADDING', (0,1), (-1,1), 40), # Ruang kosong untuk tanda tangan
+    ]))
+    elements.append(sig_table)
+
+    doc.build(elements)
+    pdf_buffer.seek(0)
+    return pdf_buffer.getvalue()
+
 
 # ==========================================
 # PEMISAHAN HALAMAN ADMIN vs STAFF
@@ -85,15 +156,15 @@ if 'role' not in st.session_state:
     st.session_state['role'] = None
 
 if st.session_state['role'] is None:
-    st.title("📦 Sistem Receiving IBT Guardian Makssar Hero Nipah Mall")
-    st.write("Silakan pilih peran Anda:")
+    st.title("📦 Sistem Receiving IBT Guardian")
+    st.write("Silahkan pilih peran anda :")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("💻 Masuk sebagai Admin (PC)", use_container_width=True):
+        if st.button("💻 Masuk sebagai Admin", use_container_width=True):
             st.session_state['role'] = "Admin"
             st.rerun()
     with col2:
-        if st.button("📱 Masuk sebagai Staff (HP)", use_container_width=True):
+        if st.button("📱 Masuk sebagai Staff", use_container_width=True):
             st.session_state['role'] = "Staff"
             st.rerun()
 
@@ -105,13 +176,12 @@ elif st.session_state['role'] == "Admin":
     if st.button("⬅️ Kembali ke Menu Awal"):
         st.session_state['role'] = None
         st.rerun()
-        
-    tab1, tab3 = st.tabs(["📥 1. Upload Data PDF", "📝 2. Laporan & Edit Excel"])
-    
-    with tab1:
-        st.header("Upload File IBT")
-        file_uploads = st.file_uploader("Upload File PDF IBT (Maks 10 file)", type=["pdf"], accept_multiple_files=True)
 
+    tab1, tab3 = st.tabs(["📥 1. Upload Data PDF", "📝 2. Laporan & Validasi PDF"])
+
+    with tab1:
+        st.header("Upload File IBT (PDF)")
+        file_uploads = st.file_uploader("Upload file PDF IBT (Maks 10 file) :", type=["pdf"], accept_multiple_files=True)
         if st.button("Proses Upload ke Database"):
             if file_uploads:
                 semua_df = []
@@ -119,48 +189,38 @@ elif st.session_state['role'] == "Admin":
                     semua_df.append(baca_pdf_ibt_multi(file))
                 if semua_df:
                     df_gabung = pd.concat(semua_df, ignore_index=True)
-                    df_gabung['Total RSP'] = df_gabung['Hasil Cek Store'] * df_gabung['RSP (Satuan)']
                     save_data(df_gabung)
                     st.success("✅ Data berhasil disimpan di server lokal! Staf HP sudah bisa mengecek.")
             else:
                 st.warning("Pilih file PDF dulu!")
-                
+
         st.markdown("---")
-        
         col_live1, col_live2 = st.columns([8, 2])
         with col_live1:
-            st.write("Data Saat Ini di Database:")
+            st.write("Data Saat ini di Database :")
         with col_live2:
-            if st.button("🔄 Muat Ulang Scanner", use_container_width=True):
+            if st.button("🔄 Muat Ulang", use_container_width=True):
                 st.rerun()
-                
         st.dataframe(load_data(), use_container_width=True)
 
     with tab3:
-        st.header("Koreksi & Download Laporan Akhir")
+        st.header("Koreksi & Download Laporan Berita Acara PDF")
         df_curr = load_data()
-        
+
         if not df_curr.empty and 'IBT No' in df_curr.columns:
-            daftar_ibt = ["Semua IBT"] + list(df_curr['IBT No'].unique())
-            pilih_ibt_admin = st.selectbox("📌 Pilih dokumen IBT yang ingin diproses/didownload:", daftar_ibt)
-            
-            if pilih_ibt_admin == "Semua IBT":
-                df_filter = df_curr
-            else:
-                df_filter = df_curr[df_curr['IBT No'] == pilih_ibt_admin]
-                
+            daftar_ibt = list(df_curr['IBT No'].unique())
+            pilih_ibt_admin = st.selectbox("📌 Pilih dokumen IBT:", daftar_ibt)
+
+            df_filter = df_curr[df_curr['IBT No'] == pilih_ibt_admin]
+
             st.markdown("---")
-            
-            if st.button(f"🔄 Tarik Data Scan Terbaru untuk {pilih_ibt_admin}"):
+            if st.button(f"🔄 Segarkan Data untuk {pilih_ibt_admin}"):
                 st.rerun()
 
-            st.write("Silakan koreksi jumlah Qty jika ada selisih sebelum mendownload:")
-            
+            st.write("Silakan koreksi jumlah Qty atau Kondisi Barang jika ada selisih:")
             df_edit = st.data_editor(df_filter, use_container_width=True)
-            
-            # Hitung ulang Total RSP & pastikan status murni berupa teks biasa tanpa ikon
-            df_edit['Total RSP'] = df_edit['Hasil Cek Store'] * df_edit['RSP (Satuan)']
-            
+
+            # Update Status Otomatis
             for i in df_edit.index:
                 target = int(df_edit.at[i, 'Target IBT'])
                 hasil = int(df_edit.at[i, 'Hasil Cek Store'])
@@ -175,43 +235,20 @@ elif st.session_state['role'] == "Admin":
 
             df_curr.update(df_edit)
             save_data(df_curr)
-            
+
             st.markdown("---")
-            
-            # Mempersiapkan File Excel dengan Baris Total di Bawahnya
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # Membuat salinan dataframe untuk Excel dan menambahkan baris total
-                df_excel = df_edit.copy()
-                total_rsp_sum = df_excel['Total RSP'].sum()
-                
-                # Baris ringkasan total di ujung bawah tabel
-                baris_total = pd.DataFrame([{
-                    "IBT No": "TOTAL KESELURUHAN",
-                    "Barcode": "",
-                    "PLU / Item Code": "",
-                    "Nama Barang": "",
-                    "Target IBT": df_excel['Target IBT'].sum(),
-                    "Hasil Cek Store": df_excel['Hasil Cek Store'].sum(),
-                    "RSP (Satuan)": "",
-                    "Total RSP": total_rsp_sum,
-                    "Status": ""
-                }])
-                
-                df_excel = pd.concat([df_excel, baris_total], ignore_index=True)
-                df_excel.to_excel(writer, index=False, sheet_name='Laporan_Receiving')
-            
-            nama_file = 'Hasil_Receiving_Semua.xlsx' if pilih_ibt_admin == "Semua IBT" else f'Hasil_Receiving_{pilih_ibt_admin}.xlsx'
-            
+
+            # Tombol Download PDF Berita Acara
+            pdf_bytes = generate_pdf_report(df_edit, pilih_ibt_admin)
             st.download_button(
-                label=f"📊 Download Laporan ({pilih_ibt_admin})",
-                data=output.getvalue(),
-                file_name=nama_file,
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                label=f"📄 Download Berita Acara PDF ({pilih_ibt_admin})",
+                data=pdf_bytes,
+                file_name=f"Berita_Acara_Receiving_{pilih_ibt_admin}.pdf",
+                mime='application/pdf',
                 type="primary"
             )
         else:
-            st.info("Belum ada data.")
+            st.info("Belum ada data di database.")
 
 # ==========================================
 # HALAMAN STAFF (HP)
@@ -221,19 +258,20 @@ elif st.session_state['role'] == "Staff":
     if st.button("⬅️ Ganti Peran"):
         st.session_state['role'] = None
         st.rerun()
-        
+
     df_data = load_data()
-    
+
     if not df_data.empty and 'IBT No' in df_data.columns:
         daftar_ibt = df_data['IBT No'].unique()
-        pilih_ibt = st.selectbox("📌 Pilih dokumen IBT yang kamu bongkar:", daftar_ibt)
+        pilih_ibt = st.selectbox("📌 Pilih IBT yang dibongkar:", daftar_ibt)
         st.markdown("---")
-        
+
+        # --- BLOK KAMERA SCANNER YANG SEMPAT HILANG ---
         st.write("📷 **Kamera Scanner (Opsional)**")
-        
+
         if "tampilkan_scanner" not in st.session_state:
             st.session_state["tampilkan_scanner"] = False
-            
+
         if not st.session_state["tampilkan_scanner"]:
             if st.button("📸 Hidupkan Scanner Kamera", type="primary"):
                 st.session_state["tampilkan_scanner"] = True
@@ -242,7 +280,7 @@ elif st.session_state['role'] == "Staff":
             if st.button("❌ Matikan Kamera (Input Manual)"):
                 st.session_state["tampilkan_scanner"] = False
                 st.rerun()
-                
+
             components.html(
                 """
                 <div id="qr-reader" style="width:100%; max-width:500px; margin:auto; border-radius:10px; border:2px solid #ddd; overflow:hidden;"></div>
@@ -359,41 +397,44 @@ elif st.session_state['role'] == "Staff":
 
         st.markdown("---")
         st.write("📦 **Input Barang ke Database**")
-        
+
         with st.form(key='form_scan', clear_on_submit=True):
-            input_manual = st.text_input("Ketik Barcode atau Item Code (PLU):", placeholder="Contoh: 3337875829007 atau 3124761")
+            input_manual = st.text_input("Ketik Barcode atau Item Code (PLU):")
             qty_input = st.number_input("Jumlah (Qty):", min_value=1, value=1, step=1)
+            reason_input = st.text_input("Kondisi Barang / Reason (Opsional, isi jika ada masalah/selisih):")
             submit_scan = st.form_submit_button("➕ Simpan Data", use_container_width=True)
 
         if submit_scan and input_manual:
             input_manual = input_manual.strip()
             df_live = load_data()
-            
+
             kondisi_ibt = df_live['IBT No'] == pilih_ibt
             kondisi_barcode = df_live['Barcode'].astype(str) == input_manual
             kondisi_plu = df_live['PLU / Item Code'].astype(str) == input_manual
-            
+
             pencarian = df_live[kondisi_ibt & (kondisi_barcode | kondisi_plu)]
-            
+
             if not pencarian.empty:
                 idx = pencarian.index[0]
                 target = int(df_live.at[idx, 'Target IBT'])
                 hasil_lama = int(df_live.at[idx, 'Hasil Cek Store'])
                 hasil_baru = hasil_lama + qty_input
-                
-                # Status murni teks biasa tanpa ikon apa pun
+
                 status_baru = "Sesuai" if hasil_baru == target else ("Over-receive" if hasil_baru > target else "Kurang")
-                
+
                 df_live.at[idx, 'Hasil Cek Store'] = hasil_baru
                 df_live.at[idx, 'Status'] = status_baru
-                
-                rsp_satuan = float(df_live.at[idx, 'RSP (Satuan)'])
-                df_live.at[idx, 'Total RSP'] = hasil_baru * rsp_satuan
-                
+
+                if reason_input.strip():
+                    alasan_lama = str(df_live.at[idx, 'Kondisi Barang / Reason'])
+                    if alasan_lama and alasan_lama != "nan":
+                        df_live.at[idx, 'Kondisi Barang / Reason'] = alasan_lama + "; " + reason_input.strip()
+                    else:
+                        df_live.at[idx, 'Kondisi Barang / Reason'] = reason_input.strip()
+
                 save_data(df_live)
-                
                 st.success(f"Berhasil! {qty_input} pcs {df_live.at[idx, 'Nama Barang']} ditambahkan.")
             else:
                 st.error(f"❌ Barang dengan kode '{input_manual}' TIDAK ADA dalam IBT {pilih_ibt}!")
     else:
-        st.warning("⚠️ Database masih kosong. Minta Admin untuk meng-upload file PDF terlebih dahulu di komputer.")
+        st.warning("⚠️ Database masih kosong. Minta Admin untuk meng-upload file PDF terlebih dahulu.")
