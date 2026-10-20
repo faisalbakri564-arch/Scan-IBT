@@ -1,6 +1,6 @@
 streamlit
 pandas
 pdfplumber
+python-barcode
+reportlab
 openpyxl
-gspread
-oauth2client
