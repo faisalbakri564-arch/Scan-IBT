@@ -13,7 +13,7 @@ from reportlab.lib import colors
 import streamlit.components.v1 as components
 
 # --- MENGATUR TAMPILAN HALAMAN WEB ---
-st.set_page_config(page_title="Receiving IBT System", layout="wide", page_icon="📦")
+st.set_page_config(page_title="Receiving IBT Guardian", layout="wide", page_icon="📦")
 
 # CSS Kustom untuk mempercantik tampilan (warna lembut/pastel transparan)
 st.markdown("""
@@ -108,7 +108,7 @@ def generate_pdf_report(df_filtered, ibt_no, store_info):
     title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=16, alignment=1, spaceAfter=10)
     normal_style = ParagraphStyle('NormalStyle', parent=styles['Normal'], fontSize=10)
     
-    elements.append(Paragraph(f"<b>BERITA ACARA RECEIVING IBT GUARDIAN</b>", title_style))
+    elements.append(Paragraph(f"<b>BERITA ACARA RECEIVING IBT</b>", title_style))
     elements.append(Paragraph(f"<b>Nomor IBT:</b> {ibt_no}", normal_style))
     elements.append(Paragraph(f"<b>IBT-in Store:</b> {store_info}", normal_style))
     elements.append(Spacer(1, 15))
