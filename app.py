@@ -35,7 +35,7 @@ def hapus_semua_data():
 # --- MENU SAMPING (SIDEBAR) UNTUK HAPUS DATA ---
 with st.sidebar:
     st.header("⚙️ Pengaturan Sistem")
-    st.write("Gunakan tombol ini untuk mereset aplikasi dan menghapus data bersih.")
+    st.write("Gunakan tombol ini untuk mereset aplikasi menghapus data.")
     if st.button("🗑️ Hapus Seluruh Data Sistem", type="primary", use_container_width=True):
         hapus_semua_data()
         st.session_state['role'] = None
@@ -44,10 +44,10 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-# --- FUNGSI BACA PDF ---
+# --- FUNGSI BACA PDF (TANPA RSP, TAMBAH KONDISI BARANG) ---
 def baca_pdf_ibt_multi(file_pdf):
     data_barang = []
-    metadata = {"IBT No": "-"}
+    metadata = {"IBT No": "-", "Store Info": "-"}
     with pdfplumber.open(file_pdf) as pdf:
         for halaman in pdf.pages:
             teks = halaman.extract_text()
@@ -55,21 +55,29 @@ def baca_pdf_ibt_multi(file_pdf):
             match_ibt = re.search(r'IBT No\.:\s*(\S+)', teks)
             if match_ibt: metadata["IBT No"] = match_ibt.group(1)
             
+            # Mencari baris IBT-in Store
+            match_store = re.search(r'IBT-in Store:\s*(.+)', teks)
+            if match_store: 
+                 # Mengambil hanya bagian IBT-in Store, bukan sampai ujung baris yang mungkin ada IBT-out
+                 store_info_raw = match_store.group(1)
+                 # Biasanya formatnya IBT-in Store: 6849-GUARD RUKO AMED BALI        IBT-out Store: ...
+                 store_info_clean = store_info_raw.split("IBT-out Store:")[0].strip()
+                 metadata["Store Info"] = store_info_clean
+            
             baris_teks = teks.split("\n")
             for baris in baris_teks:
-                # Pola Regex diperkuat agar mengambil nama utuh sampai batas EA
+                # Perbaikan REGEX: menggunakan .+? dan merapikan spasi agar nama barang utuh
                 cocok = re.search(r'\d+\s+.*?\s+(\d{6,7})\s+(\d{12,13})\s+(.+?)\s+EA\s+(\d+)', baris)
                 
                 if cocok:
                     item_code = cocok.group(1)
                     barcode = cocok.group(2)
-                    
-                    # Merapikan spasi ganda agar nama bersih dan utuh
-                    nama_lengkap = " ".join(cocok.group(3).strip().split())
+                    nama_lengkap = " ".join(cocok.group(3).strip().split()) # Merapikan nama barang
                     target_qty = int(cocok.group(4))
                     
                     data_barang.append({
                         "IBT No": metadata["IBT No"],
+                        "Store Info": metadata["Store Info"],
                         "Barcode": barcode,
                         "PLU / Item Code": item_code,
                         "Nama Barang": nama_lengkap,
@@ -80,8 +88,8 @@ def baca_pdf_ibt_multi(file_pdf):
                     })
     return pd.DataFrame(data_barang)
 
-# --- FUNGSI GENERATE PDF BERITA ACARA ---
-def generate_pdf_report(df_filtered, ibt_no):
+# --- FUNGSI GENERATE PDF BERITA ACARA DENGAN TTD SL & AM ---
+def generate_pdf_report(df_filtered, ibt_no, store_info):
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     elements = []
@@ -89,11 +97,11 @@ def generate_pdf_report(df_filtered, ibt_no):
     
     title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=16, alignment=1, spaceAfter=10)
     normal_style = ParagraphStyle('NormalStyle', parent=styles['Normal'], fontSize=10)
-    # Style khusus untuk tabel agar teks panjang turun ke bawah (word wrap)
-    cell_style = ParagraphStyle('CellStyle', parent=styles['Normal'], fontSize=8, alignment=1)
     
     elements.append(Paragraph(f"<b>BERITA ACARA RECEIVING IBT GUARDIAN</b>", title_style))
     elements.append(Paragraph(f"<b>Nomor IBT:</b> {ibt_no}", normal_style))
+    # Menambahkan informasi toko penerima
+    elements.append(Paragraph(f"<b>IBT-in Store:</b> {store_info}", normal_style))
     elements.append(Spacer(1, 15))
     
     # Generate Barcode IBT
@@ -109,22 +117,26 @@ def generate_pdf_report(df_filtered, ibt_no):
     # Tabel Data
     table_data = [["No", "PLU / Item Code", "Nama Barang", "Target", "Hasil Cek", "Kondisi / Reason", "Status"]]
     for idx, row in df_filtered.reset_index(drop=True).iterrows():
+        # Membungkus teks agar tidak terpotong ke samping
+        nama_barang_p = Paragraph(str(row['Nama Barang']), styles['Normal'])
+        kondisi_p = Paragraph(str(row['Kondisi Barang / Reason']), styles['Normal'])
+        
         table_data.append([
             str(idx + 1),
             str(row['PLU / Item Code']),
-            Paragraph(str(row['Nama Barang']), cell_style),  # Membungkus teks panjang
+            nama_barang_p, # Menggunakan Paragraph
             str(row['Target IBT']),
             str(row['Hasil Cek Store']),
-            Paragraph(str(row['Kondisi Barang / Reason']), cell_style), # Membungkus teks panjang
+            kondisi_p, # Menggunakan Paragraph
             str(row['Status'])
         ])
         
-    t = Table(table_data, colWidths=[25, 70, 185, 45, 55, 105, 60])
+    t = Table(table_data, colWidths=[25, 75, 185, 45, 55, 95, 60])
     t.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#003366')),
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'), # Mengatur vertikal alignment
         ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
         ('FONTSIZE', (0,0), (-1,-1), 8),
         ('BOTTOMPADDING', (0,0), (-1,0), 6),
@@ -145,13 +157,14 @@ def generate_pdf_report(df_filtered, ibt_no):
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
         ('FONTSIZE', (0,0), (-1,-1), 10),
-        ('BOTTOMPADDING', (0,1), (-1,1), 40), # Ruang kosong tanda tangan
+        ('BOTTOMPADDING', (0,1), (-1,1), 40), # Ruang kosong untuk tanda tangan
     ]))
     elements.append(sig_table)
     
     doc.build(elements)
     pdf_buffer.seek(0)
     return pdf_buffer.getvalue()
+
 
 # ==========================================
 # PEMISAHAN HALAMAN ADMIN vs STAFF
@@ -242,8 +255,11 @@ elif st.session_state['role'] == "Admin":
             
             st.markdown("---")
             
+            # Mendapatkan Store Info untuk IBT yang dipilih
+            store_info = df_edit['Store Info'].iloc[0] if 'Store Info' in df_edit.columns and not df_edit.empty else "-"
+            
             # Tombol Download PDF Berita Acara
-            pdf_bytes = generate_pdf_report(df_edit, pilih_ibt_admin)
+            pdf_bytes = generate_pdf_report(df_edit, pilih_ibt_admin, store_info)
             st.download_button(
                 label=f"📄 Download Berita Acara PDF ({pilih_ibt_admin})",
                 data=pdf_bytes,
@@ -270,7 +286,7 @@ elif st.session_state['role'] == "Staff":
         pilih_ibt = st.selectbox("📌 Pilih IBT yang dibongkar:", daftar_ibt)
         st.markdown("---")
         
-        # --- BLOK KAMERA SCANNER HTML5 ---
+        # --- BLOK KAMERA SCANNER YANG SEMPAT HILANG ---
         st.write("📷 **Kamera Scanner (Opsional)**")
         
         if "tampilkan_scanner" not in st.session_state:
@@ -395,7 +411,8 @@ elif st.session_state['role'] == "Staff":
                         startCamera();
                     });
                 </script>
-                """,
+                """
+                ,
                 height=530,
             )
 
@@ -405,7 +422,7 @@ elif st.session_state['role'] == "Staff":
         with st.form(key='form_scan', clear_on_submit=True):
             input_manual = st.text_input("Ketik Barcode atau Item Code (PLU):")
             qty_input = st.number_input("Jumlah (Qty):", min_value=1, value=1, step=1)
-            reason_input = st.text_input("Kondisi Barang / Reason (Opsional, isi jika ada masalah):")
+            reason_input = st.text_input("Kondisi Barang / Reason (Opsional, isi jika ada masalah/selisih):")
             submit_scan = st.form_submit_button("➕ Simpan Data", use_container_width=True)
 
         if submit_scan and input_manual:
